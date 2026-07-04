@@ -1,0 +1,316 @@
+#!/bin/bash
+# kaigi — agentchattr会議をターミナルで見る/発言するCLI
+
+set -e
+
+SERVER_URL="${AGENTCHATTR_SERVER:-http://127.0.0.1:8300}"
+WS_URL="ws://127.0.0.1:8300"
+LOG_FILE="/tmp/agentchattr-server.log"
+TOKEN=""
+
+# 色定義
+COLOR_RESET='\033[0m'
+COLOR_RED='\033[0;31m'
+COLOR_GREEN='\033[0;32m'
+COLOR_YELLOW='\033[0;33m'
+COLOR_BLUE='\033[0;34m'
+COLOR_MAGENTA='\033[0;35m'
+COLOR_CYAN='\033[0;36m'
+COLOR_GRAY='\033[0;37m'
+COLOR_BRIGHT_BLACK='\033[0;90m'
+
+# senderごとに色分けする関数
+get_color_for_sender() {
+    local sender=$1
+    local hash=$(echo -n "$sender" | md5sum | cut -c1-8)
+    local num=$((0x${hash} % 6))
+    case $num in
+        0) echo -e $COLOR_CYAN ;;
+        1) echo -e $COLOR_MAGENTA ;;
+        2) echo -e $COLOR_GREEN ;;
+        3) echo -e $COLOR_YELLOW ;;
+        4) echo -e $COLOR_BLUE ;;
+        *) echo -e $COLOR_RED ;;
+    esac
+}
+
+# トークンを抽出
+extract_token() {
+    if [ ! -f "$LOG_FILE" ]; then
+        return 1
+    fi
+    grep "Session token:" "$LOG_FILE" | tail -1 | awk '{print $NF}'
+}
+
+# トークンを取得
+get_token() {
+    TOKEN=$(extract_token)
+    if [ -z "$TOKEN" ]; then
+        echo "エラー: トークンが見つかりません。kaigi start を実行してください。" >&2
+        return 1
+    fi
+}
+
+# サーバーが起動しているか確認
+check_server() {
+    curl -s "$SERVER_URL/api/messages?limit=1&token=$TOKEN" > /dev/null 2>&1
+}
+
+# サブコマンド: log
+cmd_log() {
+    local count=${1:-20}
+    get_token || return 1
+
+    if ! check_server; then
+        echo "エラー: agentchattr サーバーが起動していません。" >&2
+        echo "kaigi start を実行してください。" >&2
+        return 1
+    fi
+
+    local json=$(curl -s "$SERVER_URL/api/messages?limit=$count&token=$TOKEN")
+
+    # JSONをパース（jqなしで処理。stdinはスクリプト本体が使うためenvで渡す）
+    KAIGI_JSON="$json" python3 - "$count" <<'PYTHON_SCRIPT'
+import json
+import os
+import sys
+from datetime import datetime
+
+data_str = os.environ.get("KAIGI_JSON", "")
+try:
+    messages = json.loads(data_str)
+except:
+    sys.exit(1)
+
+if not isinstance(messages, list):
+    messages = []
+
+for msg in messages[-int(sys.argv[1]):]:
+    ts = msg.get('timestamp', 0)
+    time_str = datetime.fromtimestamp(ts).strftime('%H:%M')
+    sender = msg.get('sender', 'unknown')
+    text = msg.get('text', '')
+
+    # senderを色付け
+    import hashlib
+    hash_obj = hashlib.md5(sender.encode())
+    num = int(hash_obj.hexdigest()[:8], 16) % 6
+    colors = ['\033[0;36m', '\033[0;35m', '\033[0;32m', '\033[0;33m', '\033[0;34m', '\033[0;31m']
+    color = colors[num]
+    reset = '\033[0m'
+
+    print(f"{time_str} {color}{sender}{reset}: {text}")
+PYTHON_SCRIPT
+}
+
+# サブコマンド: watch
+cmd_watch() {
+    get_token || return 1
+
+    if ! check_server; then
+        echo "エラー: agentchattr サーバーが起動していません。" >&2
+        echo "kaigi start を実行してください。" >&2
+        return 1
+    fi
+
+    local last_id=-1
+    echo "監視を開始します... (Ctrl-C で終了)"
+
+    while true; do
+        local json=$(curl -s "$SERVER_URL/api/messages?since_id=$last_id&token=$TOKEN")
+
+        KAIGI_JSON="$json" python3 - "$last_id" <<'PYTHON_SCRIPT'
+import json
+import os
+import sys
+from datetime import datetime
+
+data_str = os.environ.get("KAIGI_JSON", "")
+try:
+    messages = json.loads(data_str)
+except:
+    sys.exit(0)
+
+if not isinstance(messages, list):
+    sys.exit(0)
+
+import hashlib
+
+for msg in messages:
+    ts = msg.get('timestamp', 0)
+    time_str = datetime.fromtimestamp(ts).strftime('%H:%M')
+    sender = msg.get('sender', 'unknown')
+    text = msg.get('text', '')
+    msg_id = msg.get('id', -1)
+
+    # senderを色付け
+    hash_obj = hashlib.md5(sender.encode())
+    num = int(hash_obj.hexdigest()[:8], 16) % 6
+    colors = ['\033[0;36m', '\033[0;35m', '\033[0;32m', '\033[0;33m', '\033[0;34m', '\033[0;31m']
+    color = colors[num]
+    reset = '\033[0m'
+
+    print(f"{time_str} {color}{sender}{reset}: {text}")
+PYTHON_SCRIPT
+
+        # 最後のメッセージIDを抽出（最後の行が消費される）
+        last_output=$(echo "$json" | python3 -c "
+import json, sys
+try:
+    msgs = json.loads(sys.stdin.read())
+    if msgs: print(msgs[-1].get('id', -1))
+except: pass
+")
+        if [ ! -z "$last_output" ] && [ "$last_output" != "-1" ]; then
+            last_id=$last_output
+        fi
+
+        sleep 2
+    done
+}
+
+# サブコマンド: say
+cmd_say() {
+    local text=$1
+    if [ -z "$text" ]; then
+        echo "使用方法: kaigi say \"TEXT\"" >&2
+        return 1
+    fi
+
+    get_token || return 1
+
+    if ! check_server; then
+        echo "エラー: agentchattr サーバーが起動していません。" >&2
+        echo "kaigi start を実行してください。" >&2
+        return 1
+    fi
+
+    # WebSocketで送信（テキスト/トークンはenv経由で渡し、シェル展開による破損・注入を防ぐ）
+    KAIGI_TOKEN="$TOKEN" KAIGI_TEXT="$text" /home/user/agentchattr/venv/bin/python - <<'PYTHON_SCRIPT'
+import asyncio, json, os, sys
+import websockets
+
+async def send_message():
+    uri = f"ws://127.0.0.1:8300/ws?token={os.environ['KAIGI_TOKEN']}"
+    try:
+        async with websockets.connect(uri) as websocket:
+            msg = {"type": "message", "text": os.environ["KAIGI_TEXT"], "channel": "general"}
+            await websocket.send(json.dumps(msg))
+            print("メッセージを送信しました。")
+    except Exception as e:
+        print(f"エラー: {e}", file=sys.stderr)
+        sys.exit(1)
+
+asyncio.run(send_message())
+PYTHON_SCRIPT
+}
+
+# サブコマンド: status
+cmd_status() {
+    TOKEN=$(extract_token)
+    if check_server; then
+        echo -e "${COLOR_GREEN}✓ agentchattr サーバー: 起動中${COLOR_RESET}"
+
+        # エージェント一覧を取得（APIがあれば）
+        # 現在はメッセージから推測
+        local agents=$(curl -s "$SERVER_URL/api/messages?limit=100&token=$TOKEN" | python3 -c "
+import json, sys
+try:
+    msgs = json.loads(sys.stdin.read())
+    agents = set()
+    for msg in msgs:
+        sender = msg.get('sender', '')
+        if sender and sender not in ['user', 'system']:
+            agents.add(sender)
+    for a in sorted(agents):
+        print(f'  - {a}')
+except: pass
+")
+        if [ ! -z "$agents" ]; then
+            echo "参加エージェント:"
+            echo "$agents"
+        fi
+    else
+        echo -e "${COLOR_RED}✗ agentchattr サーバー: 停止中${COLOR_RESET}"
+        echo "kaigi start を実行してください。"
+        return 1
+    fi
+}
+
+# サブコマンド: start
+cmd_start() {
+    if check_server; then
+        echo "agentchattr は既に起動しています。"
+        return 0
+    fi
+
+    echo "agentchattr を起動しています..."
+
+    cd ~/agentchattr
+    env -u TMUX nohup ./venv/bin/python run.py > /tmp/agentchattr-server.log 2>&1 &
+    local run_pid=$!
+
+    # wrapper_api.py も起動
+    nohup ./venv/bin/python wrapper_api.py lmstudio >> /tmp/agentchattr-server.log 2>&1 &
+
+    echo "起動中です。しばらくお待ちください..."
+    for _ in $(seq 1 15); do
+        sleep 2
+        check_server && break
+    done
+
+    if check_server; then
+        echo -e "${COLOR_GREEN}✓ 起動完了${COLOR_RESET}"
+        get_token
+        echo "トークン: $TOKEN"
+    else
+        echo -e "${COLOR_RED}✗ 起動に失敗しました。${COLOR_RESET}"
+        echo "ログを確認してください: tail -f /tmp/agentchattr-server.log"
+        return 1
+    fi
+}
+
+# サブコマンド: help
+cmd_help() {
+    cat <<'EOF'
+kaigi — agentchattr会議をターミナルで見る/発言するCLI
+
+使用方法:
+  kaigi log [N]       直近N件のメッセージを表示（既定20件）
+  kaigi watch         新着メッセージをリアルタイム表示（Ctrl-Cで終了）
+  kaigi say "TEXT"    generalチャネルに発言（@メンション可）
+  kaigi status        サーバー生死と参加エージェント一覧を表示
+  kaigi start         サーバーが停止している場合は起動
+  kaigi help          このヘルプを表示
+
+例:
+  kaigi log           # 直近20件を表示
+  kaigi log 50        # 直近50件を表示
+  kaigi watch         # リアルタイム表示
+  kaigi say "こんにちは" # メッセージを送信
+  kaigi status        # サーバー状態を確認
+EOF
+}
+
+# メイン処理
+main() {
+    if [ $# -eq 0 ]; then
+        cmd_help
+        return 1
+    fi
+
+    local cmd=$1
+    shift
+
+    case "$cmd" in
+        log)     cmd_log "$@" ;;
+        watch)   cmd_watch "$@" ;;
+        say)     cmd_say "$@" ;;
+        status)  cmd_status "$@" ;;
+        start)   cmd_start "$@" ;;
+        help)    cmd_help "$@" ;;
+        *)       echo "不明なコマンド: $cmd"; cmd_help; return 1 ;;
+    esac
+}
+
+main "$@"
