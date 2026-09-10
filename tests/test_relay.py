@@ -250,7 +250,7 @@ label = "Beta"
             "id": request_id,
             "claim_token": claim,
             "topic": "research security release decision",
-            "options": options or {"need": ["research", "red-team"], "free_only": True, "round_timeout": 1},
+            "options": options or {"need": ["research", "red-team"], "free_only": True, "round_timeout": 5},
             "requested_by": "chatgpt",
         }
 
