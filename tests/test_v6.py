@@ -168,10 +168,10 @@ label = "ChatGPT"
         self.assertEqual(r.returncode, 0, r.stderr)
         return self.latest_run_id()
 
-    def test_public_version_is_v7(self):
+    def test_public_version_is_v8(self):
         r = self.run_cli("--version")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("7.0.0", r.stdout)
+        self.assertIn("8.0.0", r.stdout)
 
     def test_bare_topic_safe_auto_creates_verified_packet(self):
         rid = self.complete_safe_meeting()
