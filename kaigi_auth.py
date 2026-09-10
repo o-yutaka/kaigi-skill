@@ -42,12 +42,7 @@ def _is_loopback_url(url: str) -> bool:
 
 
 def discover_local_session_token(server_url: str, timeout: float = 1.5) -> str | None:
-    """Read the current agentchattr browser session token from its loopback index.
-
-    The upstream server intentionally injects this token into `/` on each request.
-    We only accept the exact token_hex(32) shape and never attempt discovery against
-    a non-loopback host.
-    """
+    """Read the current agentchattr browser session token from its loopback index."""
     url = server_url.rstrip("/")
     if not _is_loopback_url(url):
         return None
@@ -68,6 +63,15 @@ def discover_local_session_token(server_url: str, timeout: float = 1.5) -> str |
     return token if isinstance(token, str) and len(token) == 64 else None
 
 
+def auth_status_line(core: Any) -> str:
+    """Return a token-safe status line proving which local auth source resolves."""
+    try:
+        token, source = core.resolve_token()
+    except Exception:
+        token, source = None, "error"
+    return f"auth    : {'✓ ' if token else 'MISSING '}{source}"
+
+
 def apply_core(core: Any) -> None:
     if getattr(core, "_kaigi_local_auth_applied", False):
         return
@@ -78,14 +82,10 @@ def apply_core(core: Any) -> None:
         if token:
             return token, source
 
-        # Prefer the live localhost token over logfile scraping. The live index
-        # rotates with the server, while a logfile can be missing or stale.
         discovered = discover_local_session_token(str(core.SERVER_URL))
         if discovered:
             return discovered, "local-index-session"
 
-        # Preserve compatibility with older agentchattr installs that printed a
-        # reusable session token into the configured server log.
         return original()
 
     core.resolve_token = resolve_token
