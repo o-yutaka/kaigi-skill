@@ -105,12 +105,7 @@ def _terminate_proc(proc: subprocess.Popen[Any]) -> None:
 
 
 def _exec_kaigi(req: dict[str, Any], options: dict[str, Any], max_execution: int) -> dict[str, Any]:
-    """Execute one Council with stage-aware stall detection.
-
-    A remote request may choose a round timeout, but it cannot turn the worker into an
-    unbounded process runner. Preparation and each Council stage get independent
-    watchdogs; the local max_execution setting remains an upper bound.
-    """
+    """Execute one Council with preparation/stage/overall watchdogs."""
     request_id = str(req["id"])
     bound = base.find_bound_run(request_id)
     if bound:
@@ -199,6 +194,24 @@ def _exec_kaigi(req: dict[str, Any], options: dict[str, Any], max_execution: int
     return base._verified_packet(str(bound["run_id"]))
 
 
+def _is_relay_serve_cmd(cmd: str) -> bool:
+    return "serve" in cmd and ("kaigi_relay.py" in cmd or "kaigi_relay_v81.py" in cmd)
+
+
+def _daemon_pid() -> int | None:
+    pid = base.core.read_pid(base.PID_FILE)
+    if not pid:
+        return None
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        base.PID_FILE.unlink(missing_ok=True)
+        return None
+    if not _is_relay_serve_cmd(base._pid_command(pid)):
+        return None
+    return pid
+
+
 def _kill_daemon_tree(pid: int) -> None:
     if os.name == "nt":
         completed = subprocess.run(
@@ -218,14 +231,43 @@ def _kill_daemon_tree(pid: int) -> None:
         os.kill(pid, signal.SIGTERM)
 
 
+def cmd_start(args: Any) -> int:
+    base.load_config()
+    existing = _daemon_pid()
+    if existing:
+        print(f"✓ relay already running pid={existing}")
+        return 0
+    base.core.ensure_state_dirs()
+    base.DAEMON_LOG.parent.mkdir(parents=True, exist_ok=True)
+    module = pathlib.Path(__file__).resolve()
+    command = [sys.executable, str(module), "serve", "--interval", str(args.interval)]
+    with base.DAEMON_LOG.open("a", encoding="utf-8") as log:
+        kwargs: dict[str, Any] = {
+            "stdout": log,
+            "stderr": subprocess.STDOUT,
+            "stdin": subprocess.DEVNULL,
+        }
+        if os.name == "nt":
+            kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        else:
+            kwargs["start_new_session"] = True
+        proc = subprocess.Popen(command, **kwargs)
+    base.PID_FILE.write_text(str(proc.pid), encoding="utf-8")
+    time.sleep(0.3)
+    if not _daemon_pid():
+        raise base.RelayError(f"relay daemon起動を確認できません。log={base.DAEMON_LOG}")
+    print(f"✓ relay daemon started pid={proc.pid} revision={REVISION} log={base.DAEMON_LOG}")
+    return 0
+
+
 def cmd_stop(args: Any) -> int:
-    pid = base._daemon_pid()
+    pid = _daemon_pid()
     if not pid:
         _write_active(None)
         print("relay daemon is not running")
         return 0
     cmd = base._pid_command(pid)
-    if "kaigi_relay.py" not in cmd or "serve" not in cmd:
+    if not _is_relay_serve_cmd(cmd):
         raise base.RelayError("PIDの実体がrelayではないため停止しません。")
     _kill_daemon_tree(pid)
     deadline = time.time() + 7
@@ -266,6 +308,8 @@ def cmd_status(args: Any) -> int:
 base._original_status = base.cmd_status
 base.Heartbeat = ProgressHeartbeat
 base._exec_kaigi = _exec_kaigi
+base._daemon_pid = _daemon_pid
+base.cmd_start = cmd_start
 base.cmd_stop = cmd_stop
 base.cmd_status = cmd_status
 base.REVISION = REVISION
