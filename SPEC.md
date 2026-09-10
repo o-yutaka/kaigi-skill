@@ -1,27 +1,39 @@
-# kaigi — agentchattr会議をターミナルで見る/発言するCLI
+# kaigi v2 specification
 
-bash + python3標準ライブラリのみ（外部pipはwebsocket-client可: ~/agentchattr/venv/bin/python を使えばwebsockets導入済みのはず。venvのpythonを使うこと）。
+## Goal
 
-サーバー: http://127.0.0.1:8300 (agentchattr)
-- メッセージ取得: GET /api/messages?since_id=N （認証不要、JSON配列想定。フィールドは id, sender, text, channel, timestamp 相当。実際のフィールド名は ~/agentchattr/app.py を読んで正確に合わせること）
-- 発言: WebSocket ws://127.0.0.1:8300/ws?token=<TOKEN> へ {"type":"message","text":"...","channel":"general"} を送る。senderは指定しない。
-- TOKENは /tmp/agentchattr-server.log の "Session token:" 行から抽出。
+agentchattr を「起動方法やtoken取得を毎回意識せず、`kaigi` だけで使える会議CLI」にする。
 
-## 成果物: ~/kaigi-skill/kaigi （実行可能bashスクリプト1本）
-サブコマンド:
-- kaigi log [N]     : 直近N件(既定20)を「HH:MM sender: text」形式で色付き表示（senderごとに色分け）
-- kaigi watch       : 2秒ポーリングで新着を流し続ける（Ctrl-Cで終了）
-- kaigi say "TEXT"  : general チャンネルに発言（@メンション可）
-- kaigi status      : サーバー生死、参加エージェント一覧（APIがあれば）を表示
-- kaigi start       : サーバー未起動なら起動:
-    cd ~/agentchattr && env -u TMUX nohup ./venv/bin/python run.py > /tmp/agentchattr-server.log 2>&1 &
-    続けて wrapper_api.py lmstudio も同様にnohup起動
-- kaigi help        : 使い方表示（日本語）
+## UX contract
 
-## 追加成果物
-- ~/kaigi-skill/SKILL.md : スキル説明（各エージェントが読む用。name: kaigi, description, 使用例）
-- ~/kaigi-skill/install.sh : kaigi を ~/.local/bin/kaigi にsymlinkし、SKILL.mdを ~/.claude/skills/kaigi/ と ~/.hermes/skills/kaigi/ にコピーする冪等スクリプト
+- `kaigi` 単体で interactive room を開始する。サーバー停止時は自動起動する。
+- `kaigi @agent TEXT` / `kaigi TEXT` は `say` の短縮として扱う。
+- 明示操作として `room|join`, `log`, `watch`, `say`, `status|who`, `start`, `stop`, `restart`, `doctor`, `open` を提供する。
+- `log/watch/say/room/open` は server unavailable の場合だけ自動起動する。
+- `status/doctor` は診断目的なので勝手に起動しない。
 
-## 制約
-- app.py を読んでAPIレスポンスの実フィールド名に合わせること（推測で書かない）
-- エラー時は日本語で分かりやすく（サーバー停止中なら「kaigi start を実行」と案内）
+## Runtime contract
+
+- 実装は Python 3 標準ライブラリのみ。`jq`, `websockets`, `websocket-client` は不要。
+- server URL: `AGENTCHATTR_SERVER` または `http://127.0.0.1:8300`。
+- messages: `GET /api/messages`。`limit` / `since_id` を使用。
+- send: `POST /api/send` body `{"text":"...","channel":"..."}`。
+- session auth: `X-Session-Token`。token は `KAIGI_TOKEN` / `AGENTCHATTR_TOKEN` / server log の `Session token:` の順で取得。
+- agent auth: `KAIGI_BEARER_TOKEN` / `AGENTCHATTR_AGENT_TOKEN` があれば `Authorization: Bearer` を優先。
+- agentchattr home: `AGENTCHATTR_HOME` または `~/agentchattr`。
+- venv: `.venv/bin/python` を優先し、旧 `venv/bin/python` も互換対応。
+- start: `<venv>/python run.py` を detached 起動。wrapper は `KAIGI_WRAPPER`（既定 `lmstudio`）を必要に応じて起動。
+- stop: kaigi v2 が PID file に記録したプロセスだけ停止する。外部起動プロセスを推測で kill しない。
+
+## Output contract
+
+- message: `HH:MM sender: text`。TTY時のみ sender 色分け。
+- multiline text を壊さず表示する。
+- timestamp は UNIX sec / msec / ISO8601 を許容する。
+- API response は list を標準とし、`messages|data|items` wrapper も後方互換で受ける。
+- `status recent` は presence ではなく recent sender と明示する。
+
+## Compatibility
+
+- Linux / WSL を主対象。
+- `install.sh` は CLI symlink と SKILL.md を Claude / Hermes / Codex / OpenCode のglobal skill locationへ冪等配置する。
