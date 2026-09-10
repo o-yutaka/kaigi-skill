@@ -14,6 +14,7 @@
 6. full Council transcriptはrelay resultまたはprogress heartbeatとしてcloudへ送らない。
 7. terminal stateを未観測のままsuccess扱いしない。
 8. relay `running` はstage telemetryを持ち、同一stageの無期限待機を許可しない。
+9. agentchattr authの自動取得はloopback HTTPだけに限定し、取得tokenをdiskへ永続化しない。
 
 ## Public UX
 
@@ -37,6 +38,19 @@ v7 contracts remain canonical. Topic-inferred capabilities are soft; `--need` is
 Council is ROUND1 independent fan-out → ROUND2 dissent/review → FINAL synthesis. FINAL reply observation is required for complete.
 
 Decision packet schema remains `kaigi.decision_packet.v1`; capability plan and evidence transcript are bound by canonical SHA-256. Handoff remains advisory with `execution_authorized=false`.
+
+## Local agentchattr auth
+
+Current agentchattr creates a fresh random session token on each server start and injects it into the loopback index page for the browser client. A detached kaigi relay daemon cannot assume that the interactive shell's auth environment is available.
+
+kaigi resolves local REST auth in this order:
+
+1. explicit `KAIGI_BEARER_TOKEN` / `AGENTCHATTR_AGENT_TOKEN`;
+2. explicit `KAIGI_TOKEN` / `AGENTCHATTR_TOKEN`;
+3. live session token discovered from the loopback agentchattr index page;
+4. legacy server-log token fallback.
+
+Live discovery accepts only loopback HTTP hosts (`127.0.0.1`, `localhost`, `::1`) and only the exact upstream `token_hex(32)` shape. It never scrapes a remote/non-loopback endpoint for credentials. The discovered token remains in process memory only and is fetched live, so an agentchattr restart/token rotation does not require persisting a new token into relay config.
 
 ## Relay topology
 
@@ -72,6 +86,8 @@ No shared root relay key exists.
 Provisioning uses a high-entropy single-use pairing code. Server stores only `code_sha256`; on successful pair the Edge Function creates a random 32-byte worker token, stores only `key_sha256`, and returns plaintext token once.
 
 Worker stores the token in `~/.config/kaigi/relay.json` (or `KAIGI_RELAY_CONFIG`) mode 0600. Every normal Edge request requires `x-kaigi-worker-token`; server derives worker ID from the matched token and ignores client-supplied worker identity.
+
+The relay worker token and the local agentchattr session token are separate credentials with separate failure domains. The worker token may persist locally; the discovered agentchattr session token must not.
 
 ## Remote option allowlist
 
@@ -122,7 +138,7 @@ Worker has three independent execution bounds:
 2. stage watchdog — a Council stage must advance within `round_timeout` plus bounded processing margin;
 3. overall watchdog — local configured max execution remains a hard upper bound, further capped by the derived Council budget.
 
-A watchdog breach terminates the local Council child and reports failure; it is never converted to success. `kaigi relay stop` terminates the relay process tree so an active Council child cannot remain orphaned after daemon stop. On the next eligible claim, the same request uses its bound run/recovery path where one exists.
+A watchdog breach terminates the local Council child and reports failure; it is never converted to success. `kaigi relay stop` terminates the relay process tree so an active Council child cannot remain orphaned after daemon stop. Claimed-request processing exceptions are reported as terminal `failed` so lease expiry cannot turn a deterministic failure into an unbounded reclaim loop.
 
 ## Data boundary
 
@@ -141,13 +157,17 @@ Current relay protocol is `2`, adding stage/progress heartbeat while remaining c
 CI minimum:
 
 ```bash
-python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py kaigi_policy.py kaigi_capabilities.py kaigi_relay.py kaigi_relay_v81.py
+python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py kaigi_policy.py kaigi_capabilities.py kaigi_auth.py kaigi_relay.py kaigi_relay_v81.py
 python -m unittest discover -v tests -p 'test_*.py'
 bash -n install.sh
 ```
 
-Relay regression/invariants must prove:
+Regression/invariants must prove:
 
+- loopback index session discovery succeeds for current upstream token shape
+- non-loopback auth discovery performs no network credential fetch
+- explicit auth environment overrides auto-discovery
+- live index auth outranks stale legacy-log fallback
 - pair stores local worker token at mode 0600
 - public `kaigi relay once` performs claim -> real Council -> proof packet -> verified hashes -> complete
 - receipt replay sends completion without a second ROUND1
@@ -155,9 +175,10 @@ Relay regression/invariants must prove:
 - progress migration and protocol-2 heartbeat source are present and contain no active secret value
 - relay shim routes through `8.1-progress-watchdog`
 - preparation/stage watchdogs and process-tree termination are present
+- claimed processing exceptions become terminal failure instead of reclaim loops
 - legacy provider-neutral/capability/proof/recovery regressions remain green
 - canonical install does not create provider-specific directories
 
 ## Deployment source of truth
 
-Repository contains reproducible cloud schema/function/migration source but never active pairing codes, worker tokens, Supabase service-role keys, or provider API keys.
+Repository contains reproducible cloud schema/function/migration source but never active pairing codes, worker tokens, Supabase service-role keys, provider API keys, or agentchattr session tokens.
