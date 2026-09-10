@@ -188,10 +188,10 @@ label = "Cloud X"
         rid = json.loads((self.state / "latest.json").read_text())["run_id"]
         return json.loads((self.state / "runs" / f"{rid}.json").read_text())
 
-    def test_version_is_v7(self):
+    def test_version_is_v8(self):
         r = self.run_cli("--version")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("7.0.0", r.stdout)
+        self.assertIn("8.0.0", r.stdout)
 
     def test_registry_round_trip(self):
         r = self.run_cli("caps", "show", "alpha", "--json")
