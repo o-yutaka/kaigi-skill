@@ -1,7 +1,25 @@
 #!/usr/bin/env python3
-"""kaigi executable shim."""
+"""kaigi executable shim — core + optional high-level operations."""
 import pathlib
 import sys
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from kaigi_core import main
-raise SystemExit(main())
+import kaigi_core as core
+
+core.VERSION = "5.0.0"
+OPS = {"launch", "go", "reconcile", "sync", "resume"}
+
+if len(sys.argv) > 1 and sys.argv[1] in OPS:
+    from kaigi_ops import main as ops_main
+    raise SystemExit(ops_main(sys.argv[1:]))
+
+if len(sys.argv) > 1 and sys.argv[1] == "help":
+    code = core.main(sys.argv[1:])
+    print("\nv5 operations:")
+    print("  kaigi launch claude codex       CLI AIを新terminalへ起動")
+    print("  kaigi go \"議題\" --agents ...  必要なAIを起こしてCouncil開始")
+    print("  kaigi reconcile [RUN_ID]        chat実績からrunを再照合")
+    print("  kaigi resume [RUN_ID]           未完了Councilを続きから再開")
+    raise SystemExit(code)
+
+raise SystemExit(core.main())
