@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# kaigi v4 installer — idempotent
+# kaigi v5 installer — idempotent
 set -euo pipefail
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KAIGI_SCRIPT="$SKILL_DIR/kaigi"
 KAIGI_CORE="$SKILL_DIR/kaigi_core.py"
+KAIGI_OPS="$SKILL_DIR/kaigi_ops.py"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 LOCAL_BIN="$HOME/.local/bin"
 
 [[ -f "$KAIGI_SCRIPT" ]] || { echo "エラー: $KAIGI_SCRIPT がありません" >&2; exit 1; }
 [[ -f "$KAIGI_CORE" ]] || { echo "エラー: $KAIGI_CORE がありません。repository一式を更新してください" >&2; exit 1; }
+[[ -f "$KAIGI_OPS" ]] || { echo "エラー: $KAIGI_OPS がありません。repository一式を更新してください" >&2; exit 1; }
 [[ -f "$SKILL_MD" ]] || { echo "エラー: $SKILL_MD がありません" >&2; exit 1; }
 
 chmod +x "$KAIGI_SCRIPT"
@@ -47,14 +49,17 @@ if [[ ":${PATH}:" != *":${LOCAL_BIN}:"* ]]; then
 fi
 
 echo
-echo "kaigi v4 install complete"
+echo "kaigi v5 install complete"
 echo "  kaigi                                  # interactive room"
-echo "  kaigi convene \"議題\"                  # AI Councilを完走"
+echo "  kaigi convene \"議題\"                  # online AIでCouncil"
+echo "  kaigi go \"議題\" --agents claude,codex # CLIを起こしてCouncil"
+echo "  kaigi launch claude codex              # CLI AIを新terminalへ起動"
 echo "  kaigi result                           # 最新の最終結論"
+echo "  kaigi resume                           # 未完了Councilを続行"
+echo "  kaigi reconcile                        # chat実績からrunを再照合"
 echo "  kaigi history                          # 会議run履歴"
 echo "  kaigi agents                           # online + 設定AI"
 echo "  kaigi wake                             # local API AIを起床"
-echo "  kaigi api list                         # API AI一覧"
 echo "  kaigi doctor                           # 診断"
 echo
 echo "ChatGPT bridge (API):"

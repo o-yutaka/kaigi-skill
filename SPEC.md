@@ -1,138 +1,115 @@
-# kaigi v4 specification
+# kaigi v5 specification
 
 ## Goal
 
-agentchattr を `kaigi` だけで操作し、`招集 → 並列独立分析 → 異論 → 統合 → 永続run → 後から結果回収` まで一貫させる。上流のrouting / Sessions / API-agent契約は再実装せず利用する。
+agentchattrを `AI起動 → 招集 → 並列独立分析 → 異論 → 統合 → 永続run → 再照合/再開 → 結果回収` まで一貫して扱う。上流routing / Sessions / `wrapper.py` / `wrapper_api.py` を尊重し、同機能を再実装しない。
 
-## UX contract
+## Core UX
 
-- `kaigi` — interactive room。server unavailable時のみ自動起動。
+- `kaigi` — interactive room。
 - `kaigi TEXT` / `kaigi @agent TEXT` — say shortcut。
-- `kaigi convene TOPIC` — Councilを既定で開始。
-- `kaigi result [RUN_ID]` — 保存済み最終結論。
-- `kaigi history [N]` — run履歴。
-- `kaigi export [RUN_ID]` — Markdown/JSON出力。
-- `kaigi agents` — onlineと設定済みagentを統合表示。
-- `kaigi wake` / `kaigi api ...` — API agent管理。
-- `status/doctor` は診断目的なので勝手にserverを起動しない。
+- `kaigi convene TOPIC` — online agentでCouncil。
+- `kaigi go TOPIC --agents A,B,...` — 明示agentを準備してonline確認後Council。
+- `kaigi launch A B` — CLI agentを通常wrapperで対話terminalへ起動。
+- `kaigi reconcile [RUN]` — 保存runとchat実績を副作用なしで再照合。
+- `kaigi resume [RUN]` — 未完了Councilを不足stageから再開。
+- `kaigi result/history/export` — run ledger利用。
+
+## CLI launch contract
+
+CLI agent起動はupstream `wrapper.py AGENT` を使用する。
+
+- config上 `type="api"` ではなく `command` を持つagentが対象。
+- agent CLI commandがPATH上に存在することを確認。
+- terminal priority: existing tmux → WSL Windows Terminal → gnome-terminal → x-terminal-emulator → xterm → macOS Terminal。
+- `--here` は現在terminalで1 agentのみ。
+- `--dry-run` は実processを開始しない。
+- skip-permissions / bypass / yolo等のlauncherは自動利用しない。
+- 起動後は `/api/status` availableを観測してonline判定する。
+
+## `go` contract
+
+- `--agents` 明示時、API agentは既存API wake機構、CLI agentはlaunch機構を使用。
+- 指定agent全員がonlineにならなければCouncil開始を拒否。
+- `--agents` 未指定時は通常 `convene` と同じく既存online + local API auto-wakeを使う。
+- `--quorum`, `--synth`, `--round-timeout` をCouncilへ引き継ぐ。
 
 ## Council contract
 
-### ROUND 1 — independent fan-out
+ROUND1=independent fan-out、ROUND2=dissent fan-out、FINAL=synthesis。FINAL replyを実観測してのみcomplete。
 
-- online agentを既定targetにする。
-- Council前にlocal API agentだけ自動wakeを試みる。
-- 1 human messageへ全targetの明示`@mention`を入れ、agentchattr routerのfan-outで同時trigger。
-- `planner / red-team / implementer / evidence / ux / long-horizon` をround-robin割当。
-- 他agentへの@mentionを禁止し、独立した conclusion/evidence/risk/action を要求。
+各outbound Council markerに `RUN=<run_id>` を含め、ledgerのmessage IDと組み合わせて再照合可能にする。
 
-### ROUND 2 — dissent fan-out
+## Run ledger
 
-- ROUND 1で実際に応答したagentのみ再target。
-- 同時triggerし、反証・危険な前提・見落とし・修正版・残存異論を要求。
-- 同round中のagent-to-agent @mentionは抑止する。
+`KAIGI_STATE_DIR`（default `~/.local/state/kaigi`）配下。
 
-### FINAL — synthesis
+- `runs/<run_id>.json`
+- `latest.json`
+- atomic write
+- states: running / detached / waiting / failed / complete
+- stages: created / round1 / round1_timeout / round2 / round2_timeout / final / final_timeout / complete 等
 
-- `--synth` 明示を最優先。
-- 未指定は `chatgpt > claude > codex > hermes > first responder`。
-- `DECISION / WHY / DISSENT / RISKS / NEXT ACTIONS` を要求。
-- FINAL replyを実際に観測して初めてrunを `complete` にする。
+Council recordはparticipants, roles, synth, kickoff_message_id, round1, round2_message_id, round2, final_request_message_id, final_message_id, final_textを可能な限り保持する。
 
-### Controls
+## Reconcile contract
 
-- `--agents A,B,C` — 対象固定。設定済みAPI agentなら明示起動を試みる。起動後もofflineならfail。
-- `--max-agents N` — target上限。0=全員。
-- `--quorum N` — round進行最低応答数。0=全target。
-- `--round-timeout SEC` — 各round待機上限。
-- `--kickoff-only` — ROUND1 trigger後、runをdetachedで保存して戻る。
-- `--no-wake` — local API auto-wake無効。
-- `--wake-timeout SEC` — wake後online待機上限。
+`reconcile` は外部chatへ新規messageを送信しない。
 
-## Run ledger contract
+1. kickoff_message_id以後の同channel chatを読む。
+2. `RUN=<id>` + ROUND2/FINAL markerを持つuser messageを検出し、ledger欠落message IDを復元。
+3. marker間のparticipant返信をROUND1/ROUND2として再収集。
+4. FINAL request後のsynth replyが観測できればcompleteへ更新。
+5. 既にcompleteなら変更不要。
 
-保存先: `KAIGI_STATE_DIR` または `~/.local/state/kaigi`。
+Council以外のrunは現時点でresume/reconcile対象外とし、対応したと誤報しない。
 
-- `runs/<run_id>.json` — canonical run record。
-- `latest.json` — 最新run pointer。
-- run_id: timestamp + random suffix。
-- atomic temp-write + replaceで保存。
-- minimum fields: schema_version, run_id, kind, state, stage, topic, channel, server, started_at, updated_at。
-- Councilは participants, roles, synth, round1, round2, final request/reply IDs, final_text を可能な範囲で保存。
-- timeoutは `waiting`、明示detachmentは `detached`、未処理例外は `failed`。未完了を `complete` にしない。
-- `result --json` / `history --json` で機械可読に再利用可能。
+## Resume contract
 
-## Native Sessions compatibility
+`resume` は必ずreconcile相当処理を先に実行する。
 
-`--template planning|debate|code-review|design-critique` はupstream `/api/sessions/start` を使用。
+- complete → outboundなしでfinalを返す。
+- ROUND1送信済み → 既存replyを利用し、quorum不足分のみ待つ。quorum成立後、ROUND2 markerが無い場合だけ送信。
+- ROUND2送信済み → 既存replyを利用。quorum成立後、FINAL markerが無い場合だけ送信。
+- FINAL送信済み → 再送せずsynth replyだけ待つ。
+- timeout時はwaitingとして保存し、同stageを再送しない。
 
-- cast未指定: upstream auto-cast。
-- `--agents`: template rolesへround-robin cast。
-- `--cast role=agent`: explicit cast。
-- HTTP 409 active-session conflictはfallbackせずfail。
-- Sessions API/template欠落時のみ明示@mention fallbackを許容。
-- native Session runもrun ledgerへ開始・detached/follow結果を保存する。
+## Native Sessions
 
-## API agent contract
+`planning|debate|code-review|design-critique` はupstream Sessions API。HTTP 409競合時は別fallback会議を重ねない。Council以外のrun resumeは未サポート。
 
-upstream `wrapper_api.py` のOpenAI-compatible API agent契約を使う。
+## API agent / wake governance
 
-### Configuration
+upstream `wrapper_api.py`を使う。local APIのみ暗黙auto-wake可。cloudは明示指定時のみ。secret値は設定fileへ保存しない。
 
-`kaigi api add NAME --base-url URL --model MODEL [--label LABEL] [--api-key-env ENV]`
+## ChatGPT
 
-- `AGENTCHATTR_HOME/config.local.toml` に `# BEGIN KAIGI API NAME` 管理blockを冪等upsert。
-- secret値は書かず、`api_key_env` 名だけ保存。
-- `config.toml` + `config.local.toml` をPython標準`tomllib`で読み、local overlayを優先merge。
-
-### Wake governance
-
-- local endpoint判定: hostnameが `127.0.0.1`, `localhost`, `::1`, `0.0.0.0`。
-- `kaigi wake` と通常Council自動wakeはlocal APIだけ。
-- cloud APIは暗黙に起動しない。
-- explicit `kaigi wake NAME`, `kaigi api start NAME`, またはCouncil `--agents` に明示されたAPI agentはcloudでも起動意思ありと扱う。
-- `--all-api` / `api start --all` でcloudまで含めるには `--cloud` を要求。
-- 複数wrapper起動は独立ならThreadPoolExecutorで並列化する。
-- readinessはbase_urlと、指定されたapi_key_envの実環境値を確認する。
-
-## ChatGPT bridge
-
-- generic API agentのshortcut。
-- default base URL `https://api.openai.com/v1`。
-- default model `gpt-5.6`（`KAIGI_CHATGPT_MODEL` override）。
-- `api_key_env="OPENAI_API_KEY"`。
-- ChatGPT Web/App/Plus login/session流用ではない。
+汎用API agent shortcut。OpenAI API経路でありWeb/App/Plus login流用ではない。
 
 ## Process ownership
 
-- server PID: `<state>/server.pid`。
-- API wrapper PID: `<state>/wrappers/<agent>.pid`。
-- stopは記録PIDのcmdlineを確認し、自分が所有確認できるprocessだけ停止する。
-- 外部起動processを名前推測だけでkillしない。
+server/API wrapperは記録PID + cmdline確認後のみ停止。CLI agent terminalはupstream wrapperの対話プロセスとして扱い、kaigi stopで推測killしない。
 
-## Runtime contract
+## Verification
 
-- Python 3 standard library。API config解析はPython 3.11+の`tomllib`を利用。
-- messages: `GET /api/messages` (`limit`, `since_id`, `channel`)。
-- send: `POST /api/send` body `{"text":"...","channel":"..."}`。
-- status: `GET /api/status`。
-- Sessions: `/api/sessions/templates`, `/api/sessions/start`, `/api/sessions/active`。
-- auth: agent bearerを優先し、session token override、最後にserver log token。
-
-## Verification contract
-
-CI minimum:
+CI:
 
 ```bash
-python -m py_compile kaigi kaigi_core.py
-python -m unittest -v tests/test_cli.py
+python -m py_compile kaigi kaigi_core.py kaigi_ops.py
+python -m unittest discover -v tests -p 'test_*.py'
 bash -n install.sh
 HOME="$RUNNER_TEMP/kaigi-home" bash install.sh
 HOME="$RUNNER_TEMP/kaigi-home" bash install.sh
 ```
 
-Regression suiteは shortcut/room/status/agents、native Session cast、Council 3-round完走、run result/history/export、generic API config idempotency、ChatGPT config idempotencyを検証する。installerは隔離HOMEで2回実行し冪等性を確認する。
+Regression minimum:
+- v4 core 7 tests
+- reconcile late FINAL: outbound zero、ledger complete
+- resume from stored ROUND1: ROUND1再送なし、ROUND2/FINAL各1回、complete
+- launch `--here --dry-run`: process未起動
+- public version 5.0.0
+- installer idempotency / 4 skill locations
 
-## Install compatibility
+## Install
 
-Linux / WSLを主対象。`install.sh` は `kaigi` と `kaigi_core.py` の存在を事前確認し、CLI symlinkとSKILL.mdをClaude / Hermes / Codex / OpenCodeのglobal skill locationへ冪等配置する。
+`kaigi`, `kaigi_core.py`, `kaigi_ops.py`, `SKILL.md` を同repositoryに保持する。installerは3 runtime filesの存在を確認してからsymlink/skill配布する。
