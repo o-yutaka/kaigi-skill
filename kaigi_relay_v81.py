@@ -231,6 +231,52 @@ def _kill_daemon_tree(pid: int) -> None:
         os.kill(pid, signal.SIGTERM)
 
 
+def _process_claimed_with_terminal_fail(client: Any, config: dict[str, Any], req: dict[str, Any]) -> int:
+    """Process a claimed request and always attempt a terminal remote failure on exception."""
+    try:
+        return int(base.process_request(client, config, req) or 0)
+    except Exception as exc:
+        try:
+            if req.get("id") and req.get("claim_token"):
+                client.action(
+                    "fail",
+                    id=str(req["id"]),
+                    claim_token=str(req["claim_token"]),
+                    error=str(exc)[:8000],
+                )
+        except Exception as report_exc:
+            base.core.eprint(f"relay failure report warning: {report_exc}")
+        raise
+
+
+def cmd_serve(args: Any) -> int:
+    """Long-running worker; unlike v8 base, processing failures become terminal `failed`."""
+    config = base.load_config()
+    interval = max(0.5, float(args.interval or config.get("interval", base.DEFAULT_INTERVAL)))
+    print(
+        f"kaigi relay serve revision={REVISION} interval={interval}s "
+        f"worker={config.get('worker_name') or config.get('worker_id')}"
+    )
+    failures = 0
+    while True:
+        try:
+            client = base.RelayClient(config)
+            lease = max(30, min(3600, int(config.get("lease_seconds", base.DEFAULT_LEASE))))
+            req = client.claim(lease)
+            if req:
+                print(f"▶ relay request={req.get('id')} topic={str(req.get('topic') or '')[:120]}")
+                _process_claimed_with_terminal_fail(client, config, req)
+            failures = 0
+            time.sleep(interval)
+        except KeyboardInterrupt:
+            print("\nrelay stopped")
+            return 0
+        except Exception as exc:
+            failures += 1
+            base.core.eprint(f"relay warning: {exc}")
+            time.sleep(min(30.0, interval * (2 ** min(failures, 4))))
+
+
 def cmd_start(args: Any) -> int:
     base.load_config()
     existing = _daemon_pid()
@@ -309,6 +355,7 @@ base._original_status = base.cmd_status
 base.Heartbeat = ProgressHeartbeat
 base._exec_kaigi = _exec_kaigi
 base._daemon_pid = _daemon_pid
+base.cmd_serve = cmd_serve
 base.cmd_start = cmd_start
 base.cmd_stop = cmd_stop
 base.cmd_status = cmd_status
