@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# kaigi v7 installer — provider-neutral, capability-aware, idempotent
+# kaigi v8 installer — provider-neutral, capability-aware, relay-ready, idempotent
 set -euo pipefail
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,16 +9,17 @@ KAIGI_OPS="$SKILL_DIR/kaigi_ops.py"
 KAIGI_V6="$SKILL_DIR/kaigi_v6.py"
 KAIGI_POLICY="$SKILL_DIR/kaigi_policy.py"
 KAIGI_CAPS="$SKILL_DIR/kaigi_capabilities.py"
+KAIGI_RELAY="$SKILL_DIR/kaigi_relay.py"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 LOCAL_BIN="$HOME/.local/bin"
 CANONICAL_SKILL="$HOME/.local/share/kaigi/skills/kaigi"
 TARGETS="${KAIGI_SKILL_TARGETS:-auto}"
 
-for file in "$KAIGI_SCRIPT" "$KAIGI_CORE" "$KAIGI_OPS" "$KAIGI_V6" "$KAIGI_POLICY" "$KAIGI_CAPS" "$SKILL_MD"; do
+for file in "$KAIGI_SCRIPT" "$KAIGI_CORE" "$KAIGI_OPS" "$KAIGI_V6" "$KAIGI_POLICY" "$KAIGI_CAPS" "$KAIGI_RELAY" "$SKILL_MD"; do
   [[ -f "$file" ]] || { echo "エラー: $file がありません。repository一式を更新してください" >&2; exit 1; }
 done
 
-chmod +x "$KAIGI_SCRIPT"
+chmod +x "$KAIGI_SCRIPT" "$KAIGI_RELAY"
 mkdir -p "$LOCAL_BIN"
 LINK_PATH="$LOCAL_BIN/kaigi"
 
@@ -82,25 +83,21 @@ if [[ ":${PATH}:" != *":${LOCAL_BIN}:"* ]]; then
 fi
 
 echo
-echo "kaigi v7 install complete — provider-neutral / capability-aware"
+echo "kaigi v8 install complete — provider-neutral / capability-aware / relay-ready"
 echo "  kaigi \"議題\"                                      # capability cast→Council→proof"
-echo "  kaigi cast \"議題\"                                 # 副作用なしでcastだけ確認"
-echo "  kaigi caps                                          # agent能力/コスト/応答率一覧"
-echo "  kaigi caps set local-a coding research --cost local --speed fast"
+echo "  kaigi cast \"議題\"                                 # 副作用なしでcast確認"
+echo "  kaigi caps                                          # capability registry"
+echo "  kaigi relay pair --url URL                         # single-use codeで端末pair"
+echo "  kaigi relay start                                  # outbound polling daemon開始"
+echo "  kaigi relay status                                 # relay状態"
 echo "  kaigi decide \"議題\" --need coding,red-team      # 必須能力を固定"
-echo "  kaigi decide \"議題\" --need coding --free-only  # free/localだけ"
-echo "  kaigi decide \"議題\" --dry-run                   # 選定だけ確認"
 echo "  kaigi policy                                        # provider-neutral policy確認"
 echo "  kaigi recover                                       # 再照合→再開→packet"
 echo "  kaigi result                                        # 最新の最終結論"
-echo "  kaigi verify --live                                 # packet/ledger/live transcript検証"
-echo "  kaigi handoff                                       # 非権限advisory packet生成"
-echo "  kaigi audit                                         # 保存run/proof監査"
+echo "  kaigi verify --live                                 # proof検証"
 echo
 echo "Capability registry: ${KAIGI_CAPABILITY_REGISTRY:-${KAIGI_CONFIG_DIR:-$HOME/.config/kaigi}/capabilities.json}"
 echo "Provider-specific skill adapters are optional:"
 echo "  KAIGI_SKILL_TARGETS=none bash install.sh"
 echo "  KAIGI_SKILL_TARGETS=codex,opencode bash install.sh"
 echo "  KAIGI_SKILL_TARGETS=all bash install.sh"
-echo
-echo "Optional OpenAI-compatible API agents remain adapters; no named provider is required."
