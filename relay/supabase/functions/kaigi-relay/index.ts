@@ -17,6 +17,11 @@ function randomToken(): string {
   return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 }
 
+function cleanStage(value: unknown): string | null {
+  const stage = String(value || "").trim().slice(0, 120);
+  return stage || null;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
 
@@ -54,7 +59,7 @@ Deno.serve(async (req: Request) => {
       .select("id,name")
       .single();
     if (workerError || !worker) return json({ error: "worker_create_failed", detail: workerError?.message || "unknown" }, 500);
-    return json({ ok: true, worker_id: worker.id, worker_name: worker.name, token, protocol: 1 });
+    return json({ ok: true, worker_id: worker.id, worker_name: worker.name, token, protocol: 2 });
   }
 
   const workerToken = req.headers.get("x-kaigi-worker-token") || "";
@@ -72,7 +77,7 @@ Deno.serve(async (req: Request) => {
   await supabase.from("kaigi_relay_workers").update({ last_seen_at: new Date().toISOString() }).eq("id", worker.id);
 
   const lease = Math.max(30, Math.min(3600, Number(body.lease_seconds || 120)));
-  if (action === "ping") return json({ ok: true, service: "kaigi-relay", protocol: 1, auth: "worker", worker_id: workerId });
+  if (action === "ping") return json({ ok: true, service: "kaigi-relay", protocol: 2, auth: "worker", worker_id: workerId });
 
   const call = async (fn: string, args: Record<string, unknown>) => {
     const { data, error } = await supabase.rpc(fn, args);
@@ -96,9 +101,19 @@ Deno.serve(async (req: Request) => {
     return json({ ok: true, request: out.data });
   }
   if (action === "heartbeat") {
-    const out = await call("kaigi_relay_heartbeat", { p_id: id, p_claim_token: claimToken, p_worker_id: workerId, p_lease_seconds: lease });
+    const rawProgress = body.progress;
+    const progress = rawProgress && typeof rawProgress === "object" && !Array.isArray(rawProgress) ? rawProgress : {};
+    const out = await call("kaigi_relay_heartbeat_v2", {
+      p_id: id,
+      p_claim_token: claimToken,
+      p_worker_id: workerId,
+      p_lease_seconds: lease,
+      p_run_id: String(body.run_id || "") || null,
+      p_stage: cleanStage(body.stage),
+      p_progress: progress,
+    });
     if (out.error || out.data !== true) return json({ error: "heartbeat_failed", detail: out.error?.message || "claim mismatch" }, 409);
-    return json({ ok: true });
+    return json({ ok: true, protocol: 2 });
   }
   if (action === "complete") {
     const resultText = String(body.result_text || "");
