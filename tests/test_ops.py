@@ -128,6 +128,10 @@ class OpsCliTest(unittest.TestCase):
         (self.home / "config.toml").write_text(
             '[agents.dummy]\ncommand = "python3"\nlabel = "Dummy"\n', encoding="utf-8"
         )
+        (self.home / "wrapper.py").write_text("# fixture\n", encoding="utf-8")
+        venv_bin = self.home / ".venv/bin"
+        venv_bin.mkdir(parents=True, exist_ok=True)
+        (venv_bin / "python").write_text("# fixture\n", encoding="utf-8")
 
     def run_cli(self, *args, timeout=8):
         return subprocess.run([str(CLI), *args], env=self.env, text=True, capture_output=True, timeout=timeout)
