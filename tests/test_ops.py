@@ -202,10 +202,10 @@ class OpsCliTest(unittest.TestCase):
         self.assertIn("dry-run:here:", r.stdout)
         self.assertIn("wrapper.py dummy", r.stdout)
 
-    def test_public_version_is_v7(self):
+    def test_public_version_is_v8(self):
         r = self.run_cli("--version")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("7.0.0", r.stdout)
+        self.assertIn("8.0.0", r.stdout)
 
 
 if __name__ == "__main__":
