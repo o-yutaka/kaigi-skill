@@ -157,12 +157,21 @@ begin
 end;
 $$;
 
+revoke all on table public.kaigi_relay_requests from public, anon, authenticated;
+revoke all on table public.kaigi_relay_workers from public, anon, authenticated;
+revoke all on table public.kaigi_relay_pairings from public, anon, authenticated;
+grant select, insert, update, delete on table public.kaigi_relay_requests to service_role;
+grant select, insert, update, delete on table public.kaigi_relay_workers to service_role;
+grant select, insert, update, delete on table public.kaigi_relay_pairings to service_role;
+
+revoke all on function public.kaigi_relay_touch_updated_at() from public, anon, authenticated;
 revoke all on function public.kaigi_relay_claim(text,integer) from public, anon, authenticated;
 revoke all on function public.kaigi_relay_start(uuid,uuid,text,integer) from public, anon, authenticated;
 revoke all on function public.kaigi_relay_heartbeat(uuid,uuid,text,integer) from public, anon, authenticated;
 revoke all on function public.kaigi_relay_complete(uuid,uuid,text,text,text,text,text) from public, anon, authenticated;
 revoke all on function public.kaigi_relay_fail(uuid,uuid,text,text) from public, anon, authenticated;
 revoke all on function public.kaigi_relay_enqueue(text,jsonb,text) from public, anon, authenticated;
+grant execute on function public.kaigi_relay_touch_updated_at() to service_role;
 grant execute on function public.kaigi_relay_claim(text,integer) to service_role;
 grant execute on function public.kaigi_relay_start(uuid,uuid,text,integer) to service_role;
 grant execute on function public.kaigi_relay_heartbeat(uuid,uuid,text,integer) to service_role;
