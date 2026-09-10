@@ -1,18 +1,22 @@
-# kaigi
+# kaigi v4
 
-agentchattr のマルチAI会議を、ターミナルから最短で使うためのCLI。
+agentchattr のマルチAI会議を、`議題を投げる → AIを集める → 独立案 → 反証 → 最終統合 → 結果保存` まで1コマンドで回すCLI。
 
 ## 最短
 
 ```bash
-bash ~/kaigi-skill/install.sh
-kaigi
+cd ~/kaigi-skill
+git pull
+bash install.sh
+kaigi convene "この設計を本番採用すべきか"
+kaigi result
 ```
 
-`kaigi` だけで会議室に入ります。agentchattr が止まっていれば自動起動します。
+通常チャットもそのまま使えます。
 
 ```bash
-kaigi @claude これ見て
+kaigi                           # interactive room
+kaigi @claude これ見て          # 即送信
 kaigi log 30
 kaigi watch
 kaigi agents
@@ -20,19 +24,15 @@ kaigi doctor
 kaigi open
 ```
 
-## 1コマンドAI会議
+## Council: 既定のAI会議
 
-```bash
-kaigi convene "この設計を本番採用すべきか"
-```
+`kaigi convene "議題"` はオンライン参加者を使って3段で進みます。
 
-既定は `council`。オンラインのエージェントを可能な限り全員参加させ、3段で進めます。
+1. ROUND 1 — 全員を同時triggerし、他者を待たず独立分析。
+2. ROUND 2 — 実際に返答した参加者を同時triggerし、反証・見落とし・修正版を出す。
+3. FINAL — synthesizer が全ログを比較し `DECISION / WHY / DISSENT / RISKS / NEXT ACTIONS` に統合。
 
-1. ROUND 1: 各AIを同時に @mention し、他者に引っ張られない独立案を並列収集
-2. ROUND 2: 応答したAIを同時に再招集し、相互批判・反証・修正版を収集
-3. FINAL: 1エージェントが全ログを比較し `DECISION / WHY / DISSENT / RISKS / NEXT ACTIONS` に統合
-
-役割は `planner / red-team / implementer / evidence / ux / long-horizon` を参加人数に応じて割り当てます。
+各会議には `run_id` が付き、進行状態・参加者・各round・最終返答を `~/.local/state/kaigi/runs/` に保存します。
 
 ```bash
 kaigi convene "議題" --agents claude,codex,chatgpt
@@ -42,21 +42,85 @@ kaigi convene "議題" --max-agents 4
 kaigi convene "議題" --round-timeout 90
 ```
 
-`--quorum 0`（既定）は全員待ち、`--max-agents 0`（既定）はオンライン全員です。
+## 結果を後から回収
+
+```bash
+kaigi result                    # 最新runの最終結論
+kaigi result RUN_ID
+kaigi result --json
+kaigi history                   # 過去20件
+kaigi history 50 --json
+kaigi export                    # 最新runをMarkdownへ
+kaigi export RUN_ID --format json -o result.json
+```
+
+途中でtimeoutしてもrun自体は残ります。未完了を「完了」とは扱いません。
+
+## AIの起床ルール
+
+Council開始時、設定済みのローカルAPI agent（LM Studio / llama-server / Ollama等）は自動起床を試みます。クラウドAPI agentは、料金や外部副作用を勝手に発生させないため、既定の自動起床対象にはしません。
+
+```bash
+kaigi wake                      # local APIだけ
+kaigi wake localglm             # 明示したagent
+kaigi wake chatgpt              # 明示指定なのでcloudも起動対象
+kaigi wake --all-api --cloud    # 全API agentを明示起床
+kaigi convene "議題" --no-wake
+```
+
+`--agents chatgpt,claude` のようにクラウドAPI agentを明示参加させた場合は、その指定を起動意思として扱います。
+
+## 任意のOpenAI互換APIを参加者にする
+
+agentchattr の `wrapper_api.py` をそのまま利用します。
+
+```bash
+# ローカル llama-server / LM Studio 等
+kaigi api add localglm \
+  --base-url http://127.0.0.1:8080/v1 \
+  --model my-model
+
+# API keyが必要なクラウド互換endpoint
+export EXPERT_API_KEY="..."
+kaigi api add expert \
+  --base-url https://example.com/v1 \
+  --model expert-model \
+  --api-key-env EXPERT_API_KEY
+
+kaigi api list
+# config追加後はagentchattrを再起動して設定を再読込
+kaigi api start localglm
+```
+
+API keyの値は `config.local.toml` へ保存せず、環境変数名だけ保存します。
+
+## ChatGPT bridge
+
+ChatGPTは汎用API agentのショートカットです。ChatGPT Web/App/Plusログインを流用するものではなく `OPENAI_API_KEY` を使います。
+
+```bash
+export OPENAI_API_KEY="..."
+kaigi chatgpt setup
+# agentchattr再起動後
+kaigi chatgpt start
+kaigi chatgpt status
+```
+
+モデルは `kaigi chatgpt setup --model MODEL` または `KAIGI_CHATGPT_MODEL` で変更できます。
 
 ## agentchattr native Sessions
 
-上流 agentchattr の Sessions API もそのまま使えます。
+上流の構造化Sessionsも再実装せず利用します。
 
 ```bash
 kaigi templates
-kaigi convene "実装計画を作る" --template planning
-kaigi convene "A案とB案を比較" --template debate
+kaigi convene "実装計画" --template planning
+kaigi convene "A案 vs B案" --template debate
 kaigi convene "この変更をレビュー" --template code-review
 kaigi convene "UIを批評" --template design-critique
 ```
 
-明示castも可能です。
+明示cast:
 
 ```bash
 kaigi convene "計画" --template planning \
@@ -65,64 +129,33 @@ kaigi convene "計画" --template planning \
   --cast synthesiser=chatgpt
 ```
 
-## ChatGPTを会議へ参加させる
-
-agentchattr の OpenAI-compatible API agent 機構を使います。現在のChatGPTアプリ/Webログインを流用する方式ではなく、`OPENAI_API_KEY` を環境変数として使います。キー自体は `config.local.toml` に保存しません。
-
-```bash
-export OPENAI_API_KEY="..."
-kaigi chatgpt setup
-```
-
-これで `~/agentchattr/config.local.toml` に `[agents.chatgpt]` を冪等追加します。agentchattr を再起動して設定を読み直した後:
-
-```bash
-kaigi chatgpt start
-kaigi chatgpt status
-kaigi agents
-```
-
-モデルは変更できます。
-
-```bash
-kaigi chatgpt setup --model gpt-5.6
-```
-
-以後は普通の参加者として使えます。
-
-```bash
-kaigi @chatgpt この案を反証して
-kaigi convene "最終設計を決める" --agents claude,codex,chatgpt
-```
-
-`kaigi chat ...` は `kaigi chatgpt ...` の短縮です。
-
 ## interactive room
 
-`kaigi` で入室後は通常文をEnterするだけで送信します。
-
 ```text
-/convene TOPIC       council会議を開始
-/agents              エージェント一覧
+/convene TOPIC       Council開始
+/result              最新の保存済み結果
+/history             run履歴
+/agents              参加/設定AI一覧
 /to claude 本文      @claudeへ送信
 /log 50              履歴
 /status              状態
 /quit                終了
 ```
 
-## 自動認識されるAIツール
+## インストール先
 
-`install.sh` は同じ `SKILL.md` を Claude、Hermes、Codex、OpenCode のglobal skill locationへ冪等配置します。
+`install.sh` は `~/.local/bin/kaigi` をこのrepositoryの実行shimへsymlinkし、同じ `SKILL.md` を Claude / Hermes / Codex / OpenCode のglobal skill locationへ冪等配置します。`kaigi` と `kaigi_core.py` は同じrepository内に保持してください。
 
-## 設定
-
-通常は不要です。環境が違う場合だけ上書きします。
+## 主な環境変数
 
 ```bash
-export AGENTCHATTR_HOME=~/agentchattr
-export AGENTCHATTR_SERVER=http://127.0.0.1:8300
-export KAIGI_WRAPPER=lmstudio
-export KAIGI_CHANNEL=general
+AGENTCHATTR_HOME=~/agentchattr
+AGENTCHATTR_SERVER=http://127.0.0.1:8300
+KAIGI_CHANNEL=general
+KAIGI_STATE_DIR=~/.local/state/kaigi
+KAIGI_TOKEN=...
+KAIGI_BEARER_TOKEN=...
+KAIGI_CHATGPT_MODEL=...
 ```
 
-認証は server log の `Session token:` を自動取得します。必要なら `KAIGI_TOKEN`、registered-agent tokenなら `KAIGI_BEARER_TOKEN` を使えます。
+認証は明示tokenがなければserver logの `Session token:` を取得します。Python 3.11+ 推奨（API agent設定読込に標準 `tomllib` を使用）。

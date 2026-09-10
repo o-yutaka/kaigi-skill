@@ -14,3 +14,13 @@ jobs:
           python-version: '3.12'
       - run: python -m py_compile kaigi kaigi_core.py
       - run: python -m unittest -v tests/test_cli.py
+      - run: bash -n install.sh
+      - name: Installer idempotency
+        run: |
+          HOME="$RUNNER_TEMP/kaigi-home" bash install.sh
+          HOME="$RUNNER_TEMP/kaigi-home" bash install.sh
+          test -L "$RUNNER_TEMP/kaigi-home/.local/bin/kaigi"
+          test -f "$RUNNER_TEMP/kaigi-home/.claude/skills/kaigi/SKILL.md"
+          test -f "$RUNNER_TEMP/kaigi-home/.hermes/skills/kaigi/SKILL.md"
+          test -f "$RUNNER_TEMP/kaigi-home/.codex/skills/kaigi/SKILL.md"
+          test -f "$RUNNER_TEMP/kaigi-home/.config/opencode/skills/kaigi/SKILL.md"

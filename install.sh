@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# kaigi v3 installer — idempotent
+# kaigi v4 installer — idempotent
 set -euo pipefail
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KAIGI_SCRIPT="$SKILL_DIR/kaigi"
+KAIGI_CORE="$SKILL_DIR/kaigi_core.py"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 LOCAL_BIN="$HOME/.local/bin"
 
 [[ -f "$KAIGI_SCRIPT" ]] || { echo "エラー: $KAIGI_SCRIPT がありません" >&2; exit 1; }
+[[ -f "$KAIGI_CORE" ]] || { echo "エラー: $KAIGI_CORE がありません。repository一式を更新してください" >&2; exit 1; }
 [[ -f "$SKILL_MD" ]] || { echo "エラー: $SKILL_MD がありません" >&2; exit 1; }
 
 chmod +x "$KAIGI_SCRIPT"
@@ -40,19 +42,22 @@ install_skill "$HOME/.config/opencode/skills/kaigi"
 
 if [[ ":${PATH}:" != *":${LOCAL_BIN}:"* ]]; then
   echo
-  echo "注意: $LOCAL_BIN が PATH にありません。以下を shell profile に追加してください:"
+  echo "注意: $LOCAL_BIN が PATH にありません。以下をshell profileへ追加してください:"
   echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
 fi
 
 echo
-echo "kaigi v3 install complete"
-echo "  kaigi                                  # 会議室へ入る"
-echo "  kaigi convene \"議題\"                  # online AIを並列招集"
-echo "  kaigi @claude これ見て                 # 即送信"
-echo "  kaigi agents                           # 参加AI一覧"
+echo "kaigi v4 install complete"
+echo "  kaigi                                  # interactive room"
+echo "  kaigi convene \"議題\"                  # AI Councilを完走"
+echo "  kaigi result                           # 最新の最終結論"
+echo "  kaigi history                          # 会議run履歴"
+echo "  kaigi agents                           # online + 設定AI"
+echo "  kaigi wake                             # local API AIを起床"
+echo "  kaigi api list                         # API AI一覧"
 echo "  kaigi doctor                           # 診断"
 echo
-echo "ChatGPT bridge:"
+echo "ChatGPT bridge (API):"
 echo "  export OPENAI_API_KEY=..."
 echo "  kaigi chatgpt setup"
 echo "  # agentchattr再起動後: kaigi chatgpt start"
