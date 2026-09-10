@@ -5,6 +5,7 @@ set -euo pipefail
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KAIGI_SCRIPT="$SKILL_DIR/kaigi"
 KAIGI_CORE="$SKILL_DIR/kaigi_core.py"
+KAIGI_AUTH="$SKILL_DIR/kaigi_auth.py"
 KAIGI_OPS="$SKILL_DIR/kaigi_ops.py"
 KAIGI_V6="$SKILL_DIR/kaigi_v6.py"
 KAIGI_POLICY="$SKILL_DIR/kaigi_policy.py"
@@ -16,7 +17,7 @@ LOCAL_BIN="$HOME/.local/bin"
 CANONICAL_SKILL="$HOME/.local/share/kaigi/skills/kaigi"
 TARGETS="${KAIGI_SKILL_TARGETS:-auto}"
 
-for file in "$KAIGI_SCRIPT" "$KAIGI_CORE" "$KAIGI_OPS" "$KAIGI_V6" "$KAIGI_POLICY" "$KAIGI_CAPS" "$KAIGI_RELAY" "$KAIGI_RELAY_V81" "$SKILL_MD"; do
+for file in "$KAIGI_SCRIPT" "$KAIGI_CORE" "$KAIGI_AUTH" "$KAIGI_OPS" "$KAIGI_V6" "$KAIGI_POLICY" "$KAIGI_CAPS" "$KAIGI_RELAY" "$KAIGI_RELAY_V81" "$SKILL_MD"; do
   [[ -f "$file" ]] || { echo "エラー: $file がありません。repository一式を更新してください" >&2; exit 1; }
 done
 
@@ -84,7 +85,7 @@ if [[ ":${PATH}:" != *":${LOCAL_BIN}:"* ]]; then
 fi
 
 echo
-echo "kaigi v8 install complete — provider-neutral / capability-aware / relay-progress-ready"
+echo "kaigi v8 install complete — provider-neutral / capability-aware / relay-progress-ready / auth-bootstrap"
 echo "  kaigi \"議題\"                                      # capability cast→Council→proof"
 echo "  kaigi cast \"議題\"                                 # 副作用なしでcast確認"
 echo "  kaigi caps                                          # capability registry"
@@ -97,6 +98,7 @@ echo "  kaigi recover                                       # 再照合→再開
 echo "  kaigi result                                        # 最新の最終結論"
 echo "  kaigi verify --live                                 # proof検証"
 echo
+echo "AgentChattr auth: explicit token first; otherwise current loopback web-session token is auto-bootstrapped."
 echo "Capability registry: ${KAIGI_CAPABILITY_REGISTRY:-${KAIGI_CONFIG_DIR:-$HOME/.config/kaigi}/capabilities.json}"
 echo "Provider-specific skill adapters are optional:"
 echo "  KAIGI_SKILL_TARGETS=none bash install.sh"
