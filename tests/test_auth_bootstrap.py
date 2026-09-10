@@ -106,11 +106,12 @@ class AuthBootstrapTest(unittest.TestCase):
         self.assertIn("server-root", r.stdout)
 
     def test_explicit_session_token_has_precedence(self):
+        Handler.messages = []
         env = self.env()
         env["KAIGI_TOKEN"] = "wrong-explicit-token"
         r = subprocess.run([str(CLI), "say", "must", "fail"], env=env, text=True, capture_output=True, timeout=5)
         self.assertNotEqual(r.returncode, 0)
-        self.assertEqual(Handler.messages[-1]["text"], "auth works")
+        self.assertEqual(Handler.messages, [])
 
 
 if __name__ == "__main__":
