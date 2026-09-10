@@ -1,28 +1,19 @@
-import contextlib
-import io
 import unittest
+from types import SimpleNamespace
 
-import kaigi_relay as base
-import kaigi_relay_v81 as v81
+import kaigi_auth
 
 
 class RelayAuthStatusTest(unittest.TestCase):
-    def test_status_reports_local_auth_source(self):
-        original_status = base._original_status
-        original_resolve = base.core.resolve_token
-        base._original_status = lambda _args: 0
-        base.core.resolve_token = lambda: ("secret-not-printed", "local-index-session")
-        try:
-            out = io.StringIO()
-            with contextlib.redirect_stdout(out):
-                code = v81.cmd_status(None)
-        finally:
-            base._original_status = original_status
-            base.core.resolve_token = original_resolve
-        text = out.getvalue()
-        self.assertEqual(code, 0)
-        self.assertIn("auth    : local-index-session", text)
+    def test_status_reports_local_auth_source_without_token(self):
+        core = SimpleNamespace(resolve_token=lambda: ("secret-not-printed", "local-index-session"))
+        text = kaigi_auth.auth_status_line(core)
+        self.assertEqual(text, "auth    : ✓ local-index-session")
         self.assertNotIn("secret-not-printed", text)
+
+    def test_missing_auth_is_explicit(self):
+        core = SimpleNamespace(resolve_token=lambda: (None, "none"))
+        self.assertEqual(kaigi_auth.auth_status_line(core), "auth    : MISSING none")
 
 
 if __name__ == "__main__":
