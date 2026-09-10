@@ -1,136 +1,42 @@
+---
+name: kaigi
+description: agentchattr のマルチエージェント会議をターミナルから確認・参加・発言・監視・起動・診断する。ユーザーが「会議を見て」「kaigiを使って」「他のエージェントに聞いて」「@claudeへ伝えて」など、agentchattr上の会議や複数AIとのやり取りを求めた時に使う。
+---
 # kaigi
 
-ターミナルから agentchattr の会議に参加・監視・発言するCLI。
+`kaigi` CLI を使って agentchattr の会議を操作する。
 
-## 概要
+## 最短操作
 
-`kaigi` は agentchattr (マルチエージェント会議室) を CLI から操作するスキルです。リアルタイムメッセージ表示、メッセージ送信、サーバー状態確認ができます。
+- `kaigi` — 会議室へ入る。停止中なら自動起動する。
+- `kaigi @claude これ見て` — サブコマンド無しでそのまま発言する。
+- `kaigi log 30` — 直近30件を見る。
+- `kaigi watch` — 新着をライブ表示する。
+- `kaigi status` — サーバー/API/最近発言したエージェントを確認する。
+- `kaigi doctor` — 接続・配置・認証を診断する。
+- `kaigi open` — Web UI を開く。
 
-**サーバー**: http://127.0.0.1:8300
-**WebSocket**: ws://127.0.0.1:8300/ws?token=`<TOKEN>`
+## エージェントとして使う時
 
-## インストール
+会議内容の確認だけなら `kaigi log 30` を使う。継続監視が必要なら `kaigi watch`。発言を求められたら `kaigi @name 本文` または `kaigi say 本文` を使う。
 
-```bash
-bash ~/kaigi-skill/install.sh
-```
+`status` の `recent` は「最近のメッセージに現れた sender」であり、厳密なオンラインpresenceとして扱わない。実際に送信・取得できた結果だけを成功として報告する。
 
-同スクリプトで以下が実行されます：
-1. `kaigi` を `~/.local/bin/kaigi` にシンボリックリンク
-2. `SKILL.md` を `~/.claude/skills/kaigi/` にコピー
-3. `SKILL.md` を `~/.hermes/skills/kaigi/` にコピー
+## 会議室内コマンド
 
-## サブコマンド
+`kaigi` で入室後:
+- `/quit` — 終了
+- `/status` — 状態確認
+- `/log [N]` — 履歴表示
+- `/to NAME TEXT` — `@NAME TEXT` として送信
 
-### kaigi log [N]
+## 設定
 
-直近 N 件（既定 20 件）のメッセージを「HH:MM sender: text」形式で表示。sender ごとに異なる色で表示されます。
-
-**例:**
-```bash
-kaigi log
-kaigi log 50
-```
-
-### kaigi watch
-
-新着メッセージを 2 秒ごとにポーリングしてリアルタイム表示します。Ctrl-C で終了。
-
-**例:**
-```bash
-kaigi watch
-```
-
-### kaigi say "TEXT"
-
-指定したテキストを generalチャネルに発言します。@メンション可。
-
-**例:**
-```bash
-kaigi say "こんにちは、@claude"
-kaigi say "タスク完了しました"
-```
-
-### kaigi status
-
-agentchattr サーバーの生死状況と参加エージェント一覧を表示します。
-
-**例:**
-```bash
-kaigi status
-```
-
-**出力例:**
-```
-✓ agentchattr サーバー: 起動中
-参加エージェント:
-  - claude
-  - codex
-```
-
-### kaigi start
-
-agentchattr が停止していれば起動します。既に起動していれば何もしません。
-
-起動コマンド：
-```bash
-cd ~/agentchattr && env -u TMUX nohup ./venv/bin/python run.py > /tmp/agentchattr-server.log 2>&1 &
-nohup ./venv/bin/python wrapper_api.py lmstudio >> /tmp/agentchattr-server.log 2>&1 &
-```
-
-**例:**
-```bash
-kaigi start
-```
-
-### kaigi help
-
-使用方法を表示します。
-
-**例:**
-```bash
-kaigi help
-```
-
-## トークン認証
-
-内部的には `/tmp/agentchattr-server.log` から "Session token:" 行を抽出してトークンを得ます。サーバー起動時に自動的に設定されます。
-
-## エラーメッセージ
-
-**"トークンが見つかりません"**
-→ `kaigi start` を実行してサーバーを起動してください。
-
-**"agentchattr サーバーが起動していません"**
-→ `kaigi start` を実行してください。
-
-## 環境変数
-
-- `AGENTCHATTR_SERVER` — サーバーURL（既定: `http://127.0.0.1:8300`）
-
-## 依存関係
-
-- bash
-- curl
-- python3 （標準ライブラリのみ + websockets）
-- `/home/user/agentchattr/venv/bin/python` （websockets導入済み）
-
-## 実装詳細
-
-- **log/watch**: REST API (`GET /api/messages`) でメッセージを取得
-- **say**: WebSocket (`ws://127.0.0.1:8300/ws?token=<TOKEN>`) で送信
-  ```json
-  {
-    "type": "message",
-    "text": "...",
-    "channel": "general"
-  }
-  ```
-- **status**: メッセージ履歴から sender を抽出して一覧化
-- **start**: nohup で run.py と wrapper_api.py を起動
-
-## 注記
-
-- sender 名ごとに MD5 ハッシュで色を割り当てているため、実行環境で一貫した色分けが可能です
-- watch モードで 2 秒ポーリングは低負荷・低遅延のバランスです
-- say コマンドは `/home/user/agentchattr/venv/bin/python` の websockets ライブラリを使用します
+必要な場合だけ環境変数で上書きする。
+- `AGENTCHATTR_SERVER` — 既定 `http://127.0.0.1:8300`
+- `AGENTCHATTR_HOME` — 既定 `~/agentchattr`
+- `AGENTCHATTR_LOG` — 既定 `/tmp/agentchattr-server.log`
+- `KAIGI_CHANNEL` — 既定 `general`
+- `KAIGI_WRAPPER` — 既定 `lmstudio`
+- `KAIGI_TOKEN` — session token を明示指定
+- `KAIGI_BEARER_TOKEN` — agent bearer token を明示指定
