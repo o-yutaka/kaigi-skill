@@ -34,6 +34,19 @@ kaigi decide "この変更を監査" --need coding,red-team --free-only
 
 選定は概念的に `hard capability coverage → inferred/preferred coverage → cost → online → speed → observed response reliability → deterministic tie-break`。provider名は優先順位に使わない。
 
+## AgentChattr auth bootstrap
+
+現行AgentChattrはserver起動ごとに新しいsession tokenを生成し、localhost web rootへ `window.__SESSION_TOKEN__` として注入する。kaigiは明示credentialがない場合、この**現在稼働中のloopback server**からtokenを取得してREST APIへ `X-Session-Token` として使う。
+
+優先順位は `KAIGI_BEARER_TOKEN / AGENTCHATTR_AGENT_TOKEN` → `KAIGI_TOKEN / AGENTCHATTR_TOKEN` → loopback live session bootstrap → legacy server log。live bootstrapは `localhost / 127.0.0.1 / ::1` 等のloopbackに限定し、remote AgentChattr URLからは自動取得しない。
+
+```bash
+kaigi status
+# auth     : ✓ server-root   ← 明示tokenなしでlive tokenを取得できた場合
+```
+
+このsession tokenはSupabase relayへ送らず、PC内のAgentChattr REST通信だけに使う。AgentChattr再起動でtokenが変わっても、次のkaigi processは現在のrootから取り直す。
+
 ## ChatGPT/cloud → local kaigi relay
 
 v8 relayはPC側で外向きHTTPS pollingする。localhost/agentchattrをインターネットへ公開せず、外部から任意shell commandも受け付けない。
@@ -103,7 +116,7 @@ Council発言本文、Decision packet、agent secretはprogress heartbeatへ含�
 
 さらに preparation、各Council stage、全体実行に独立watchdogを置く。stageが進まないまま許容時間を超えた場合はsuccessにせず明示エラーで停止する。`kaigi relay stop` はdaemonだけでなく、そのdaemonが実行中のCouncil子processも同じprocess treeとして停止する。
 
-これにより `running` が無期限に見える状態を避け、reclaim時は既存 `relay_request_id` に束縛されたrunを `recover` する。
+local処理例外はremote requestをterminal `failed` へ更新してからpoll loopへ戻る。lease切れだけで同じ失敗requestを無限reclaimしない。reclaim対象になる途中runは既存 `relay_request_id` に束縛されたrunを `recover` する。
 
 ## Provider-neutral policy
 
