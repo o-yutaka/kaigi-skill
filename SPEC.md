@@ -11,8 +11,9 @@
 3. meeting output / Decision packet / relay result はAuthority/Executionではない。
 4. relayはlocal agentchattrへのinbound portを要求しない。
 5. relayは任意shell command / arbitrary kaigi subcommandを受理しない。
-6. full Council transcriptはrelay resultとしてcloudへ送らない。
+6. full Council transcriptはrelay resultまたはprogress heartbeatとしてcloudへ送らない。
 7. terminal stateを未観測のままsuccess扱いしない。
+8. relay `running` はstage telemetryを持ち、同一stageの無期限待機を許可しない。
 
 ## Public UX
 
@@ -24,14 +25,14 @@ kaigi recover [RUN_ID]        durable Council recovery
 kaigi verify [RUN_ID] --live  proof verification
 kaigi relay pair ...          worker provisioning
 kaigi relay start|stop        background outbound worker
-kaigi relay status            local + remote status
+kaigi relay status            local + remote + active stage status
 kaigi relay once              process one request
 kaigi relay config            local remote-execution policy
 ```
 
 ## Capability / Council / proof
 
-v7 contracts remain canonical. Topic-inferred capabilities are soft; `--need` is hard. Selection is capability coverage → cost → online → speed → observed response reliability. Provider identity is routing only.
+v7 contracts remain canonical. Topic-inferred capabilities are soft; `--need` is hard. Selection is capability coverage → cost → online → speed → observed response reliability. Provider identity is routing only。
 
 Council is ROUND1 independent fan-out → ROUND2 dissent/review → FINAL synthesis. FINAL reply observation is required for complete.
 
@@ -53,13 +54,16 @@ The PC initiates every network connection. No local HTTP listener is introduced 
 
 ## Relay database
 
-Canonical schema: `relay/supabase/schema.sql`.
+Canonical base schema: `relay/supabase/schema.sql`.
+Follow-up idempotent migrations: `relay/supabase/migrations/` in lexical order.
 
 Tables use RLS with no public policies; direct anon/authenticated access is denied. Edge Function uses service role internally. RPC execution is revoked from `public`, `anon`, and `authenticated`, granted only to `service_role`.
 
 `kaigi_relay_claim` atomically chooses oldest pending or expired leased work with `FOR UPDATE SKIP LOCKED`, assigns `claim_token`, `worker_id`, and `lease_until`.
 
 States: `pending -> claimed -> running -> succeeded|failed`; expired claimed/running work can be reclaimed.
+
+Progress hardening adds `stage`, `progress`, `heartbeat_at` and `kaigi_relay_heartbeat_v2`. The progress object is metadata-only and must never contain Council transcript text or credentials.
 
 ## Pairing/auth
 
@@ -100,13 +104,35 @@ After verified local completion, worker writes `kaigi.relay_receipt.v1` mode 060
 
 Lease heartbeat runs during long local execution.
 
+## Progress / hang contract
+
+Relay revision `8.1-progress-watchdog` reports only privacy-preserving progress metadata through authenticated heartbeat:
+
+- request ID / local run ID
+- run state and stage
+- ROUND1 / ROUND2 observed reply counts
+- participant count
+- synthesizer identity
+
+It does not transmit Council message text, packet body, local paths, API keys, or worker token.
+
+Worker has three independent execution bounds:
+
+1. preparation watchdog — a local run must become identifiable within a bounded preparation window;
+2. stage watchdog — a Council stage must advance within `round_timeout` plus bounded processing margin;
+3. overall watchdog — local configured max execution remains a hard upper bound, further capped by the derived Council budget.
+
+A watchdog breach terminates the local Council child and reports failure; it is never converted to success. `kaigi relay stop` terminates the relay process tree so an active Council child cannot remain orphaned after daemon stop. On the next eligible claim, the same request uses its bound run/recovery path where one exists.
+
 ## Data boundary
 
-Relay queue necessarily stores topic/options. On success it stores only final result text, run ID, packet SHA-256, and transcript SHA-256. The full local evidence transcript and Decision packet stay on the PC unless separately exported by the user.
+Relay queue necessarily stores topic/options. During execution it may additionally store metadata-only progress. On success it stores only final result text, run ID, packet SHA-256, and transcript SHA-256. The full local evidence transcript and Decision packet stay on the PC unless separately exported by the user.
 
 ## Supabase Edge Function
 
 Canonical source: `relay/supabase/functions/kaigi-relay/index.ts`.
+
+Current relay protocol is `2`, adding stage/progress heartbeat while remaining compatible with v8 workers that send heartbeat without progress fields.
 
 `verify_jwt=false` is intentional because the endpoint uses custom single-use pairing and per-device worker-token auth. No unauthenticated action exists except `pair`, which requires an unused, unexpired high-entropy code.
 
@@ -115,20 +141,23 @@ Canonical source: `relay/supabase/functions/kaigi-relay/index.ts`.
 CI minimum:
 
 ```bash
-python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py kaigi_policy.py kaigi_capabilities.py kaigi_relay.py
+python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py kaigi_policy.py kaigi_capabilities.py kaigi_relay.py kaigi_relay_v81.py
 python -m unittest discover -v tests -p 'test_*.py'
 bash -n install.sh
 ```
 
-Relay regression must prove:
+Relay regression/invariants must prove:
 
 - pair stores local worker token at mode 0600
 - public `kaigi relay once` performs claim -> real Council -> proof packet -> verified hashes -> complete
 - receipt replay sends completion without a second ROUND1
 - remote cloud request is denied by default local policy
+- progress migration and protocol-2 heartbeat source are present and contain no active secret value
+- relay shim routes through `8.1-progress-watchdog`
+- preparation/stage watchdogs and process-tree termination are present
 - legacy provider-neutral/capability/proof/recovery regressions remain green
 - canonical install does not create provider-specific directories
 
 ## Deployment source of truth
 
-Repository contains reproducible cloud schema/function source but never active pairing codes, worker tokens, Supabase service-role keys, or provider API keys.
+Repository contains reproducible cloud schema/function/migration source but never active pairing codes, worker tokens, Supabase service-role keys, or provider API keys.
