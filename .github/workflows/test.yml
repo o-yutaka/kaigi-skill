@@ -32,6 +32,8 @@ jobs:
           grep -q '8.1-progress-watchdog' kaigi_relay_v81.py
           grep -q 'local meeting preparation stall' kaigi_relay_v81.py
           grep -q 'local meeting stage stall' kaigi_relay_v81.py
+          grep -q '_process_claimed_with_terminal_fail' kaigi_relay_v81.py
+          grep -q 'base.cmd_serve = cmd_serve' kaigi_relay_v81.py
           grep -q 'kaigi_relay_v81' kaigi
           grep -q 'killpg' kaigi_relay_v81.py
       - name: Provider-neutral installer idempotency
