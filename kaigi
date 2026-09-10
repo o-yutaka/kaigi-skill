@@ -5,9 +5,11 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import kaigi_core as core
+import kaigi_auth as auth
 import kaigi_policy as policy
 import kaigi_capabilities as caps
 
+auth.apply_core(core)
 policy.apply_core(core)
 caps.apply_core(core)
 core.VERSION = "8.0.0"
@@ -86,6 +88,7 @@ if argv and argv[0] == "help":
     print("  synth default   : balanced (provider名の優先順位なし)")
     print("  safe-auto       : capability→cost→online→speed→reliability")
     print("  cloud API       : 明示許可 + local relay policy許可時のみ")
+    print("  agentchattr auth: explicit token → loopback live session bootstrap → legacy log")
     raise SystemExit(code)
 
 # v8 UX: @agent shorthand remains direct message; any other bare text is a meeting topic.
