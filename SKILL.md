@@ -77,6 +77,14 @@ Relay結果はlocal Decision packet verify後だけ成功返送する。cloudへ
 
 同一relay requestはlocal run IDへ束縛する。返送失敗後はlocal receiptを再送しCouncilを二重起動しない。途中runはrecover経路を使う。
 
+### Relay progress / watchdog
+
+`8.1-progress-watchdog` hardeningでは、authenticated heartbeatへ `run_id`, `stage/state`, ROUND1/ROUND2 reply件数, participant件数, synthだけを送る。Council本文やDecision packet本文はprogressへ出さない。
+
+`kaigi relay status` はactive request/run/stage/reply件数を表示する。preparation・各Council stage・全体実行には独立watchdogを置き、進行停止はsuccess扱いせず明示エラーへ落とす。
+
+`kaigi relay stop` はrelay daemonだけでなく、そのdaemon配下の実行中Council process treeも停止対象にする。再claim時は同じ `relay_request_id` に束縛されたrunをrecoverし、可能な限り二重Councilを避ける。
+
 ## 成功判定
 
-server/API応答、online status、agent reply、FINAL reply、packet hash、relay completionなど実観測したものだけ成功扱いする。未観測をPASSと報告しない。
+server/API応答、online status、agent reply、FINAL reply、packet hash、relay completionなど実観測したものだけ成功扱いする。`running`/heartbeatだけをCouncil完了とみなさない。未観測をPASSと報告しない。
