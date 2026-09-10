@@ -87,6 +87,20 @@ relay requestはlocal runへ `relay_request_id` / request hashで束縛する。
 
 relayはfull Council transcriptをcloudへ返さない。返すのは最終decision、run ID、`packet_sha256`, `transcript_sha256`。
 
+### Local agentchattr auth
+
+現行agentchattrはserver起動ごとにrandom session tokenを生成し、localhostのindex pageへ `window.__SESSION_TOKEN__` として注入する。detached relay daemonはinteractive shellの認証envを継承しない場合があるため、kaigiは次の順でlocal authを解決する。
+
+```text
+explicit KAIGI/AGENTCHATTR auth env
+        ↓ absent
+live loopback index session token
+        ↓ unavailable
+legacy server-log fallback
+```
+
+live discoveryは `http://127.0.0.1` / `http://localhost` / `http://[::1]` 相当だけに限定し、非loopback endpointからcredentialを取得しない。tokenはmemory上だけで使い、diskへ保存しない。これによりagentchattr再起動でsession tokenがrotationしても、relay側へtokenを手入力・再保存する必要がない。
+
 ### Relay progress hardening
 
 実機で「workerは生存しているがCouncilのどのstageで待っているかcloud側から判別できない」状態を検出したため、v8 relayには `8.1-progress-watchdog` hardeningを含める。
@@ -103,7 +117,7 @@ Council発言本文、Decision packet、agent secretはprogress heartbeatへ含�
 
 さらに preparation、各Council stage、全体実行に独立watchdogを置く。stageが進まないまま許容時間を超えた場合はsuccessにせず明示エラーで停止する。`kaigi relay stop` はdaemonだけでなく、そのdaemonが実行中のCouncil子processも同じprocess treeとして停止する。
 
-これにより `running` が無期限に見える状態を避け、reclaim時は既存 `relay_request_id` に束縛されたrunを `recover` する。
+claimed requestのlocal処理が例外終了した場合はremote stateを必ずterminal `failed`へ移し、lease expiry後に同じ失敗requestを無限reclaimしない。
 
 ## Provider-neutral policy
 
