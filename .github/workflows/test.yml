@@ -12,7 +12,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m py_compile kaigi kaigi_core.py kaigi_ops.py
+      - run: python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py
       - run: python -m unittest discover -v tests -p 'test_*.py'
       - run: bash -n install.sh
       - name: Installer idempotency
