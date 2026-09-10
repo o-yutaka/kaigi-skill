@@ -15,6 +15,14 @@ jobs:
       - run: python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py kaigi_policy.py kaigi_capabilities.py kaigi_relay.py
       - run: python -m unittest discover -v tests -p 'test_*.py'
       - run: bash -n install.sh
+      - name: Relay cloud source invariants
+        run: |
+          test -f relay/supabase/schema.sql
+          test -f relay/supabase/functions/kaigi-relay/index.ts
+          grep -q 'x-kaigi-worker-token' relay/supabase/functions/kaigi-relay/index.ts
+          ! grep -q 'x-kaigi-relay-key' relay/supabase/functions/kaigi-relay/index.ts
+          grep -q 'kaigi_relay_enqueue' relay/supabase/schema.sql
+          ! grep -q 'OPENAI_API_KEY\|SUPABASE_SERVICE_ROLE_KEY=' relay/supabase/schema.sql relay/supabase/functions/kaigi-relay/index.ts
       - name: Provider-neutral installer idempotency
         run: |
           HOME="$RUNNER_TEMP/kaigi-neutral" KAIGI_SKILL_TARGETS=none bash install.sh

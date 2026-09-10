@@ -1,243 +1,134 @@
-# kaigi v7 specification
+# kaigi v8 specification
 
 ## Goal
 
-agentchattrを `capability-aware safe selection → wake/launch → parallel independent analysis → dissent → synthesis → durable run → recovery → proof packet → advisory handoff` まで一貫して扱う。control planeはprovider-neutralとし、provider-specific integrationをoptional adapterへ隔離する。
+`capability-aware cast → provider-neutral Council → durable recovery → Decision proof` を維持しつつ、ChatGPT/cloud control sideからlocal kaigiへ安全にadvisory meeting requestを渡せるoutbound relayを提供する。
+
+## Invariants
+
+1. required providers = `[]`。provider名をauto priorityへ使わない。
+2. cloud API agentは暗黙利用しない。
+3. meeting output / Decision packet / relay result はAuthority/Executionではない。
+4. relayはlocal agentchattrへのinbound portを要求しない。
+5. relayは任意shell command / arbitrary kaigi subcommandを受理しない。
+6. full Council transcriptはrelay resultとしてcloudへ送らない。
+7. terminal stateを未観測のままsuccess扱いしない。
 
 ## Public UX
 
-- `kaigi "TOPIC"` — capability-aware safe-auto Council。complete後proof packetを自動生成。
-- `kaigi cast TOPIC` — launch/send/run creationなしでcastのみ計算。
-- `kaigi caps` — effective agent capability/profile一覧。
-- `kaigi caps set NAME CAPS...` — local capability registry更新。
-- `kaigi caps infer TOPIC` — topic heuristicによるsoft requirement確認。
-- `kaigi @agent TEXT` — direct message shortcut。
-- `kaigi decide TOPIC` — safe-autoの明示形。
-- `kaigi reconcile/resume/recover` —未完了Council回復。
-- `kaigi packet/verify/handoff/audit` — proof surface。
-
-## Provider-neutral invariant
-
-- required providers = `[]`
-- agent/provider名をsafe-auto priorityやdefault synthesizer priorityへ使用しない
-- identity名はrouting/disambiguationにのみ使用可能
-- local API / CLI / cloud API / online-unclassifiedの分類はruntime/config factとして使用可能
-- cloud APIは暗黙利用しない
-- provider-specific skill/runtime integrationはoptional adapter
-
-## Capability registry
-
-Default path: `~/.config/kaigi/capabilities.json`
-Override: `KAIGI_CONFIG_DIR`, `KAIGI_CAPABILITY_REGISTRY`
-Schema: `kaigi.capability_registry.v1`
-
-例:
-
-```json
-{
-  "schema": "kaigi.capability_registry.v1",
-  "agents": {
-    "local-a": {
-      "capabilities": ["coding", "research", "deep-reasoning"],
-      "cost": "local",
-      "speed": "fast",
-      "context_tokens": 24576,
-      "enabled": true
-    }
-  }
-}
+```text
+kaigi "TOPIC"                 capability-aware Council
+kaigi cast TOPIC              side-effect zero cast preview
+kaigi caps ...                capability registry
+kaigi recover [RUN_ID]        durable Council recovery
+kaigi verify [RUN_ID] --live  proof verification
+kaigi relay pair ...          worker provisioning
+kaigi relay start|stop        background outbound worker
+kaigi relay status            local + remote status
+kaigi relay once              process one request
+kaigi relay config            local remote-execution policy
 ```
 
-`capabilities`は明示metadata。agent名/model名からcoding/research等を推測しない。
+## Capability / Council / proof
 
-Effective profileは:
+v7 contracts remain canonical. Topic-inferred capabilities are soft; `--need` is hard. Selection is capability coverage → cost → online → speed → observed response reliability. Provider identity is routing only.
 
-1. runtime-derived generic facts (`general`, local APIなら`local-free`, CLIなら`cli`)
-2. agent configの`capabilities/cost/speed/context_tokens`（存在する場合）
-3. kaigi registry entry（最優先）
+Council is ROUND1 independent fan-out → ROUND2 dissent/review → FINAL synthesis. FINAL reply observation is required for complete.
 
-をmergeする。
+Decision packet schema remains `kaigi.decision_packet.v1`; capability plan and evidence transcript are bound by canonical SHA-256. Handoff remains advisory with `execution_authorized=false`.
 
-Cost classes: `free`, `local`, `low`, `unknown`, `metered`。
-Speed classes: `fast`, `normal`, `unknown`, `deep`。
+## Relay topology
 
-## Topic inference
+```text
+cloud control side
+  -> service-role enqueue
+  -> kaigi_relay_requests
+  <- local worker HTTPS polling/claim
+  -> local kaigi Council
+  -> local packet verify
+  -> result_text + run_id + packet_sha256 + transcript_sha256
+```
 
-v7はtopic textに対する決定論的keyword rulesで、`coding`, `research`, `red-team`, `vision`, `long-context`, `deep-reasoning`, `fast` をsoft preferenceとして推定できる。
+The PC initiates every network connection. No local HTTP listener is introduced by relay.
 
-これはcapability証明ではなく要求推定である。agent capability自体をtopic/nameから推測してはならない。
+## Relay database
 
-`--no-cap-infer`で無効化可能。
+Canonical schema: `relay/supabase/schema.sql`.
 
-## Hard / soft semantics
+Tables use RLS with no public policies; direct anon/authenticated access is denied. Edge Function uses service role internally. RPC execution is revoked from `public`, `anon`, and `authenticated`, granted only to `service_role`.
 
-- `--need CAP[,CAP...]` = hard requirement。selected cast全体でcoverできなければnon-zero。
-- `--prefer CAP[,CAP...]` = soft preference。
-- topic inferred capabilities = soft preference。
-- `--best-effort-capabilities` = hard requirement未充足でもユーザーが明示的に続行を許可。
-- `--free-only` = effective costが`free`または`local`の候補のみ。
+`kaigi_relay_claim` atomically chooses oldest pending or expired leased work with `FOR UPDATE SKIP LOCKED`, assigns `claim_token`, `worker_id`, and `lease_until`.
 
-Explicit `--agents`でも`--need`が指定されていれば、そのcastのdeclared capability coverageを検証する。
+States: `pending -> claimed -> running -> succeeded|failed`; expired claimed/running work can be reclaimed.
 
-## Capability-aware selection
+## Pairing/auth
 
-まずprovider-neutral safe-auto policyでeligible candidate集合を作る。その後v7 selectorがgreedy coverageを行う。
+No shared root relay key exists.
 
-Selection score order:
+Provisioning uses a high-entropy single-use pairing code. Server stores only `code_sha256`; on successful pair the Edge Function creates a random 32-byte worker token, stores only `key_sha256`, and returns plaintext token once.
 
-1. uncovered hard capability gain
-2. uncovered inferred/preferred capability gain
-3. cost rank
-4. online vs offline
-5. speed rank
-6. observed ROUND1 response reliability
-7. provider-neutral base order / deterministic name tie-break
+Worker stores the token in `~/.config/kaigi/relay.json` (or `KAIGI_RELAY_CONFIG`) mode 0600. Every normal Edge request requires `x-kaigi-worker-token`; server derives worker ID from the matched token and ignores client-supplied worker identity.
 
-Response reliabilityは過去Council run ledgerから `ROUND1 replies / invitations` を算出する。観測2件未満はneutral扱い。これはavailability/reliabilityであり、answer quality scoreではない。
+## Remote option allowlist
 
-選択後、最大7 agentまではCouncil role slotsへのcapability affinity合計が最大になる順序を探索する。7超はgreedy role fit。role preference:
+Only these request options are accepted by enqueue and local worker:
 
-- planner → deep-reasoning/research/long-context
-- red-team → red-team
-- implementer → coding
-- evidence → research/long-context
-- ux → vision
-- long-horizon → long-context/deep-reasoning
+- `need`
+- `prefer`
+- `free_only`
+- `allow_cloud`
+- `max_agents`
+- `min_agents`
+- `round_timeout`
+- `quorum`
+- `best_effort_capabilities`
+- `no_launch`
 
-既存coreのrole protocol自体は変更せず、cast orderで適合させる。
+No `agents`, `synth`, command, cwd, file path, env injection, shell, or generic argv surface is allowed.
 
-## Capability plan ledger
+`allow_cloud=true` requires a second local gate: `allow_remote_cloud=true`, set only through local `kaigi relay config --allow-remote-cloud`. Default is deny.
 
-Capability-aware Councilのrun ledgerに `capability_plan` (`kaigi.capability_plan.v1`) をsnapshotする。
+Remote numeric bounds: agents/quorum max 8; `round_timeout` 5..900s. Worker execution timeout is locally bounded.
 
-最低フィールド:
+## Idempotency/recovery
 
-- selection_policy
-- required
-- preferred
-- inferred
-- free_only
-- best_effort
-- selected
-- coverage
-- missing_required
-- effective profiles for selected agents
-- capability registry SHA256
+Each remote request is bound to local run via `relay_request_id` and `relay_request_sha256`.
 
-profile snapshotにはcapabilities/cost/speed/context_tokens/runtime classification/online flag/observed reliabilityを含められる。API secret/tokenは含めない。
+If a bound run is incomplete on reclaim, worker invokes `recover RUN_ID` rather than creating a new Council.
 
-## Safe-auto base contract
+After verified local completion, worker writes `kaigi.relay_receipt.v1` mode 0600 before remote `complete`. If completion transport fails and the request is reclaimed, matching receipt is replayed without starting another Council.
 
-provider-neutral eligibility:
+Lease heartbeat runs during long local execution.
 
-- local API = implicit candidate, auto-wake可
-- non-API command agent = CLI candidate, offlineならupstream normal `wrapper.py` launch可
-- cloud API = default excluded; `--allow-cloud`またはexplicit `--agents`時のみ
-- online-unclassified = default excluded; `--allow-unknown`時のみ
-- user/system/bot = excluded
-- `--dry-run` = launch/wake/send/run creation zero
+## Data boundary
 
-## Council contract
+Relay queue necessarily stores topic/options. On success it stores only final result text, run ID, packet SHA-256, and transcript SHA-256. The full local evidence transcript and Decision packet stay on the PC unless separately exported by the user.
 
-ROUND1=independent fan-out、ROUND2=dissent/review fan-out、FINAL=synthesis。FINAL replyを実観測した場合だけcomplete。
+## Supabase Edge Function
 
-outbound markerは`RUN=<run_id>`。run ledgerはparticipants, roles, synth, outbound IDs, replies, finalを保持する。
+Canonical source: `relay/supabase/functions/kaigi-relay/index.ts`.
 
-## Synthesizer
-
-Provider-neutral policyのbalanced synthesizerを維持する。
-
-Priority:
-
-1. explicit `--synth`
-2. `KAIGI_SYNTH_AGENT`
-3. balanced history policy（current participantのうち最近successful FINAL担当していないagent）
-
-provider名による優先順位は禁止。
-
-## Run persistence / recovery
-
-`KAIGI_STATE_DIR` default `~/.local/state/kaigi`。
-
-- `runs/<run_id>.json`
-- `latest.json`
-- atomic write
-- `reconcile` outbound zero
-- `resume` existing ROUND2/FINAL markerを再送しない
-- `recover` reconcile→resume→completeならpacket生成
-
-## Decision packet
-
-Path: `packets/<run_id>.json`
-Schema: `kaigi.decision_packet.v1`
-
-既存v6 proof contractを維持する。Capability-aware runでは`capability_plan`もpacketへ含め、`packet_sha256`のcanonical hash対象とする。
-
-`transcript_sha256`はevidence transcriptのみを束縛。`packet_sha256`は`packet_sha256`自身を除いたpacket全体を束縛するためcapability selection provenanceも含む。
-
-## Verify
-
-`kaigi verify RUN`:
-
-1. schema
-2. packet_sha256
-3. transcript_sha256
-4. run ledger final_text
-5. ledger packet pointer
-
-`--live`は同evidence message IDsをagentchattrから再取得してlive transcript hashまで照合する。
-
-## Handoff
-
-Schema `kaigi.handoff.v1`。Decision packet local verify後に生成する。capability planがpacketに存在すればhandoffにもcopyし、handoff SHA256に束縛する。
-
-Authority invariant:
-
-- `classification="advisory"`
-- `execution_authorized=false`
-- `requires_separate_authority=true`
-
-## Agent launch / cloud governance
-
-CLI agentはupstream normal `wrapper.py AGENT`。API agentはupstream `wrapper_api.py`。skip-permissions/bypass/yolo launcherを自動利用しない。
-
-Cloud agentを暗黙wake/参加させない。secret値はregistry/packet/runへ保存しない。
-
-## Install
-
-Required repository runtime files:
-
-- `kaigi`
-- `kaigi_core.py`
-- `kaigi_ops.py`
-- `kaigi_v6.py`
-- `kaigi_policy.py`
-- `kaigi_capabilities.py`
-- `SKILL.md`
-
-Canonical skill targetのみmandatory。provider/tool固有skill locationsはoptional adapter。
+`verify_jwt=false` is intentional because the endpoint uses custom single-use pairing and per-device worker-token auth. No unauthenticated action exists except `pair`, which requires an unused, unexpired high-entropy code.
 
 ## Verification gate
 
-GitHub CI最低条件:
+CI minimum:
 
 ```bash
-python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py kaigi_policy.py kaigi_capabilities.py
+python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py kaigi_policy.py kaigi_capabilities.py kaigi_relay.py
 python -m unittest discover -v tests -p 'test_*.py'
 bash -n install.sh
 ```
 
-Regression coverage:
+Relay regression must prove:
 
-- existing core/v5/v6 regressions
-- provider-neutral no-named-provider E2E
-- v7 public version
-- capability registry round-trip
-- topic soft inference
-- hard capability fail-closed
-- explicit best-effort escape hatch
-- cost preference for equivalent capability
-- cast dry surface
-- bare topic + hard capability → Council → capability_plan → proof packet → verify PASS
-- no mandatory provider-specific skill directory
-- optional adapter install
+- pair stores local worker token at mode 0600
+- public `kaigi relay once` performs claim -> real Council -> proof packet -> verified hashes -> complete
+- receipt replay sends completion without a second ROUND1
+- remote cloud request is denied by default local policy
+- legacy provider-neutral/capability/proof/recovery regressions remain green
+- canonical install does not create provider-specific directories
+
+## Deployment source of truth
+
+Repository contains reproducible cloud schema/function source but never active pairing codes, worker tokens, Supabase service-role keys, or provider API keys.
