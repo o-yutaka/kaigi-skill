@@ -12,7 +12,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py kaigi_policy.py kaigi_capabilities.py
+      - run: python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py kaigi_policy.py kaigi_capabilities.py kaigi_relay.py
       - run: python -m unittest discover -v tests -p 'test_*.py'
       - run: bash -n install.sh
       - name: Provider-neutral installer idempotency
@@ -21,6 +21,7 @@ jobs:
           HOME="$RUNNER_TEMP/kaigi-neutral" KAIGI_SKILL_TARGETS=none bash install.sh
           test -L "$RUNNER_TEMP/kaigi-neutral/.local/bin/kaigi"
           test -f "$RUNNER_TEMP/kaigi-neutral/.local/share/kaigi/skills/kaigi/SKILL.md"
+          test -x ./kaigi_relay.py
           test ! -e "$RUNNER_TEMP/kaigi-neutral/.claude"
           test ! -e "$RUNNER_TEMP/kaigi-neutral/.hermes"
           test ! -e "$RUNNER_TEMP/kaigi-neutral/.codex"
