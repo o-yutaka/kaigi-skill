@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# kaigi v6 installer — idempotent
+# kaigi v6 installer — provider-neutral, idempotent
 set -euo pipefail
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -7,14 +7,15 @@ KAIGI_SCRIPT="$SKILL_DIR/kaigi"
 KAIGI_CORE="$SKILL_DIR/kaigi_core.py"
 KAIGI_OPS="$SKILL_DIR/kaigi_ops.py"
 KAIGI_V6="$SKILL_DIR/kaigi_v6.py"
+KAIGI_POLICY="$SKILL_DIR/kaigi_policy.py"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 LOCAL_BIN="$HOME/.local/bin"
+CANONICAL_SKILL="$HOME/.local/share/kaigi/skills/kaigi"
+TARGETS="${KAIGI_SKILL_TARGETS:-auto}"
 
-[[ -f "$KAIGI_SCRIPT" ]] || { echo "エラー: $KAIGI_SCRIPT がありません" >&2; exit 1; }
-[[ -f "$KAIGI_CORE" ]] || { echo "エラー: $KAIGI_CORE がありません。repository一式を更新してください" >&2; exit 1; }
-[[ -f "$KAIGI_OPS" ]] || { echo "エラー: $KAIGI_OPS がありません。repository一式を更新してください" >&2; exit 1; }
-[[ -f "$KAIGI_V6" ]] || { echo "エラー: $KAIGI_V6 がありません。repository一式を更新してください" >&2; exit 1; }
-[[ -f "$SKILL_MD" ]] || { echo "エラー: $SKILL_MD がありません" >&2; exit 1; }
+for file in "$KAIGI_SCRIPT" "$KAIGI_CORE" "$KAIGI_OPS" "$KAIGI_V6" "$KAIGI_POLICY" "$SKILL_MD"; do
+  [[ -f "$file" ]] || { echo "エラー: $file がありません。repository一式を更新してください" >&2; exit 1; }
+done
 
 chmod +x "$KAIGI_SCRIPT"
 mkdir -p "$LOCAL_BIN"
@@ -39,33 +40,68 @@ install_skill() {
   fi
 }
 
-install_skill "$HOME/.claude/skills/kaigi"
-install_skill "$HOME/.hermes/skills/kaigi"
-install_skill "${CODEX_HOME:-$HOME/.codex}/skills/kaigi"
-install_skill "$HOME/.config/opencode/skills/kaigi"
+csv_has() {
+  local needle="$1"
+  case ",${TARGETS}," in
+    *,all,*|*,"$needle",*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+should_install_adapter() {
+  local name="$1" root="$2" binary="$3" env_hint="${4:-}"
+  if csv_has "$name"; then return 0; fi
+  [[ "$TARGETS" == "auto" ]] || return 1
+  [[ -d "$root" ]] && return 0
+  [[ -n "$env_hint" ]] && return 0
+  command -v "$binary" >/dev/null 2>&1 && return 0
+  return 1
+}
+
+install_optional() {
+  local name="$1" root="$2" binary="$3" target="$4" env_hint="${5:-}"
+  if should_install_adapter "$name" "$root" "$binary" "$env_hint"; then
+    install_skill "$target"
+  else
+    echo "- adapter skill: $name (not detected)"
+  fi
+}
+
+# Canonical skill is the only mandatory install target. Tool/provider-specific
+# locations are optional adapters and are never prerequisites for kaigi.
+install_skill "$CANONICAL_SKILL"
+install_optional "claude" "$HOME/.claude" "claude" "$HOME/.claude/skills/kaigi"
+install_optional "hermes" "$HOME/.hermes" "hermes" "$HOME/.hermes/skills/kaigi"
+install_optional "codex" "${CODEX_HOME:-$HOME/.codex}" "codex" "${CODEX_HOME:-$HOME/.codex}/skills/kaigi" "${CODEX_HOME:-}"
+install_optional "opencode" "$HOME/.config/opencode" "opencode" "$HOME/.config/opencode/skills/kaigi"
 
 if [[ ":${PATH}:" != *":${LOCAL_BIN}:"* ]]; then
   echo
-  echo "注意: $LOCAL_BIN が PATH にありません。以下をshell profileへ追加してください:"
+  echo "注意: $LOCAL_BIN が PATH にありません。shell profileへ追加してください:"
   echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
 fi
 
 echo
-echo "kaigi v6 install complete"
+echo "kaigi v6 install complete — provider-neutral"
 echo "  kaigi \"議題\"                           # safe-auto→Council→proof packet"
-echo "  kaigi @claude これ見て                  # 個別agentへ即送信"
+echo "  kaigi @agent-a これ見て                 # 個別agentへ即送信"
 echo "  kaigi decide \"議題\" --dry-run          # 自動選定だけ確認"
 echo "  kaigi decide \"議題\" --allow-cloud      # cloud APIも候補に許可"
-echo "  kaigi recover                           # 最新未完了runを再照合→再開→packet"
-echo "  kaigi result                            # 最新の最終結論"
-echo "  kaigi verify --live                     # packet/ledger/live transcript検証"
-echo "  kaigi handoff                           # 非権限advisory packet生成"
-echo "  kaigi audit                             # 保存run/proof監査"
-echo "  kaigi launch claude codex               # CLI AIを新terminalへ起動"
-echo "  kaigi agents                            # online + 設定AI"
-echo "  kaigi doctor                            # 診断"
+echo "  kaigi policy                           # provider-neutral policy確認"
+echo "  kaigi recover                          # 再照合→再開→packet"
+echo "  kaigi result                           # 最新の最終結論"
+echo "  kaigi verify --live                    # packet/ledger/live transcript検証"
+echo "  kaigi handoff                          # 非権限advisory packet生成"
+echo "  kaigi audit                            # 保存run/proof監査"
+echo "  kaigi launch agent-a agent-b           # CLI AIを新terminalへ起動"
+echo "  kaigi agents                           # online + 設定AI"
+echo "  kaigi doctor                           # 診断"
 echo
-echo "ChatGPT bridge (API):"
+echo "Skill adapters: auto-detect. Canonical skill is always installed."
+echo "  KAIGI_SKILL_TARGETS=none bash install.sh"
+echo "  KAIGI_SKILL_TARGETS=codex,opencode bash install.sh"
+echo "  KAIGI_SKILL_TARGETS=all bash install.sh"
+echo
+echo "Optional ChatGPT API adapter:"
 echo "  export OPENAI_API_KEY=..."
 echo "  kaigi chatgpt setup"
-echo "  # agentchattr再起動後: kaigi chatgpt start"

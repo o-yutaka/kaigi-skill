@@ -12,15 +12,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py
+      - run: python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py kaigi_policy.py
       - run: python -m unittest discover -v tests -p 'test_*.py'
       - run: bash -n install.sh
-      - name: Installer idempotency
+      - name: Provider-neutral installer idempotency
         run: |
-          HOME="$RUNNER_TEMP/kaigi-home" bash install.sh
-          HOME="$RUNNER_TEMP/kaigi-home" bash install.sh
-          test -L "$RUNNER_TEMP/kaigi-home/.local/bin/kaigi"
-          test -f "$RUNNER_TEMP/kaigi-home/.claude/skills/kaigi/SKILL.md"
-          test -f "$RUNNER_TEMP/kaigi-home/.hermes/skills/kaigi/SKILL.md"
-          test -f "$RUNNER_TEMP/kaigi-home/.codex/skills/kaigi/SKILL.md"
-          test -f "$RUNNER_TEMP/kaigi-home/.config/opencode/skills/kaigi/SKILL.md"
+          HOME="$RUNNER_TEMP/kaigi-neutral" KAIGI_SKILL_TARGETS=none bash install.sh
+          HOME="$RUNNER_TEMP/kaigi-neutral" KAIGI_SKILL_TARGETS=none bash install.sh
+          test -L "$RUNNER_TEMP/kaigi-neutral/.local/bin/kaigi"
+          test -f "$RUNNER_TEMP/kaigi-neutral/.local/share/kaigi/skills/kaigi/SKILL.md"
+          test ! -e "$RUNNER_TEMP/kaigi-neutral/.claude"
+          test ! -e "$RUNNER_TEMP/kaigi-neutral/.hermes"
+          test ! -e "$RUNNER_TEMP/kaigi-neutral/.codex"
+          test ! -e "$RUNNER_TEMP/kaigi-neutral/.config/opencode"
+      - name: Optional skill adapters
+        run: |
+          HOME="$RUNNER_TEMP/kaigi-adapters" KAIGI_SKILL_TARGETS=all bash install.sh
+          test -f "$RUNNER_TEMP/kaigi-adapters/.local/share/kaigi/skills/kaigi/SKILL.md"
+          test -f "$RUNNER_TEMP/kaigi-adapters/.claude/skills/kaigi/SKILL.md"
+          test -f "$RUNNER_TEMP/kaigi-adapters/.hermes/skills/kaigi/SKILL.md"
+          test -f "$RUNNER_TEMP/kaigi-adapters/.codex/skills/kaigi/SKILL.md"
+          test -f "$RUNNER_TEMP/kaigi-adapters/.config/opencode/skills/kaigi/SKILL.md"
