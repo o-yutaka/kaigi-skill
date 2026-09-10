@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""kaigi executable shim — v6 autopilot/proof + v5 operations + core."""
+"""kaigi executable shim — v7 proof queue/provenance + v6/v5/core surfaces."""
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import kaigi_core as core
 
-core.VERSION = "6.0.0"
+core.VERSION = "7.0.0"
 
 V5_OPS = {"launch", "go", "reconcile", "sync", "resume"}
-V6_OPS = {"decide", "auto", "packet", "verify", "handoff", "audit", "recover"}
+V6_PROOF_PROXY = {"packet", "handoff", "recover"}
+V6_OPS = {"audit"}
+V7_OPS = {"queue", "todo", "jobs", "verify"}
 CORE_COMMANDS = {
     "room", "join", "log", "l", "watch", "w", "say", "s", "status", "st", "who",
     "agents", "a", "convene", "meet", "c", "templates", "tpl", "result", "res",
@@ -18,6 +20,18 @@ CORE_COMMANDS = {
 }
 
 argv = list(sys.argv[1:])
+
+if argv and argv[0] in {"decide", "auto"}:
+    import kaigi_v7 as v7
+    raise SystemExit(v7.run_v6(argv, bind_invocation=True))
+
+if argv and argv[0] in V7_OPS:
+    import kaigi_v7 as v7
+    raise SystemExit(v7.main(argv))
+
+if argv and argv[0] in V6_PROOF_PROXY:
+    import kaigi_v7 as v7
+    raise SystemExit(v7.run_v6(argv, bind_invocation=False))
 
 if argv and argv[0] in V6_OPS:
     from kaigi_v6 import main as v6_main
@@ -34,21 +48,24 @@ if argv and argv[0] == "help":
     print("  kaigi go \"議題\" --agents ...   指定AIを準備してCouncil開始")
     print("  kaigi reconcile [RUN_ID]         chat実績からrunを再照合")
     print("  kaigi resume [RUN_ID]            未完了Councilを続きから再開")
-    print("\nv6 autopilot/proof:")
+    print("\nv6/v7 autopilot + proof:")
     print("  kaigi \"議題\"                    safe-auto→Council→proof packet")
-    print("  kaigi decide \"議題\"             上と同じ。詳細option指定用")
     print("  kaigi recover [RUN_ID]           reconcile→resume→packet")
-    print("  kaigi packet [RUN_ID]            hash付きDecision packet生成")
     print("  kaigi verify [RUN_ID] --live     packet/ledger/live transcript検証")
+    print("  kaigi verify --current-runtime   packetのruntime provenanceも現在実体と照合")
     print("  kaigi handoff [RUN_ID]           advisory handoff packet生成")
     print("  kaigi audit                      保存run/proof整合監査")
+    print("\nv7 Jobs bridge:")
+    print("  kaigi queue [RUN_ID]             verified DecisionをTO DOへ登録")
+    print("  kaigi queue --dry-run            Jobs APIへ書かず確認")
+    print("  kaigi jobs --status open         upstream Jobs一覧")
     raise SystemExit(code)
 
-# v6 UX: @agent shorthand remains a direct message, but any other bare text is a meeting topic.
+# v7 UX: @agent shorthand remains direct; any other bare text is a safe-auto meeting topic.
 if argv and not argv[0].startswith("-") and argv[0] not in CORE_COMMANDS:
     if argv[0].startswith("@"):
         raise SystemExit(core.main(argv))
-    from kaigi_v6 import main as v6_main
-    raise SystemExit(v6_main(["decide", *argv]))
+    import kaigi_v7 as v7
+    raise SystemExit(v7.run_v6(["decide", *argv], bind_invocation=True))
 
 raise SystemExit(core.main(argv if argv else None))
