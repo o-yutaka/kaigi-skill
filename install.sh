@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# kaigi v2 installer — idempotent
+# kaigi v3 installer — idempotent
 set -euo pipefail
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,7 +45,14 @@ if [[ ":${PATH}:" != *":${LOCAL_BIN}:"* ]]; then
 fi
 
 echo
-echo "kaigi v2 install complete"
-echo "  kaigi                 # 会議室へ入る"
-echo "  kaigi @claude これ見て # 即送信"
-echo "  kaigi doctor          # 診断"
+echo "kaigi v3 install complete"
+echo "  kaigi                                  # 会議室へ入る"
+echo "  kaigi convene \"議題\"                  # online AIを並列招集"
+echo "  kaigi @claude これ見て                 # 即送信"
+echo "  kaigi agents                           # 参加AI一覧"
+echo "  kaigi doctor                           # 診断"
+echo
+echo "ChatGPT bridge:"
+echo "  export OPENAI_API_KEY=..."
+echo "  kaigi chatgpt setup"
+echo "  # agentchattr再起動後: kaigi chatgpt start"
