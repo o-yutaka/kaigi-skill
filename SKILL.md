@@ -16,6 +16,19 @@ kaigi result
 
 bare topicはcapability-aware Council。個別agentへだけ送る時は `kaigi @agent-a TEXT`。
 
+## AgentChattr auth
+
+明示credentialがなければ、現在稼働中のloopback AgentChattr web rootへ注入された `window.__SESSION_TOKEN__` を取得してREST用 `X-Session-Token` に使う。取得対象はloopback URLだけ。AgentChattr session tokenをSupabase relayへ送らない。
+
+優先順位:
+
+1. `KAIGI_BEARER_TOKEN` / `AGENTCHATTR_AGENT_TOKEN`
+2. `KAIGI_TOKEN` / `AGENTCHATTR_TOKEN`
+3. live loopback `window.__SESSION_TOKEN__`
+4. legacy server log
+
+`kaigi status` の `auth : ✓ server-root` はlive bootstrap成功を示す。AgentChattr再起動後は新processが現在tokenを取り直す。
+
 ## Capability
 
 能力はagent名から推測しない。registry / agent config / runtime factだけを使う。
@@ -83,7 +96,7 @@ Relay結果はlocal Decision packet verify後だけ成功返送する。cloudへ
 
 `kaigi relay status` はactive request/run/stage/reply件数を表示する。preparation・各Council stage・全体実行には独立watchdogを置き、進行停止はsuccess扱いせず明示エラーへ落とす。
 
-`kaigi relay stop` はrelay daemonだけでなく、そのdaemon配下の実行中Council process treeも停止対象にする。再claim時は同じ `relay_request_id` に束縛されたrunをrecoverし、可能な限り二重Councilを避ける。
+`kaigi relay stop` はrelay daemonだけでなく、そのdaemon配下の実行中Council process treeも停止対象にする。local処理例外はremote requestをterminal `failed` へ更新してからpollを継続し、lease切れによる同じ失敗requestの無限reclaimを防ぐ。reclaim対象になる途中runは同じ `relay_request_id` のrecover経路を使う。
 
 ## 成功判定
 
