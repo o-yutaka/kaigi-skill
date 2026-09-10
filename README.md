@@ -85,7 +85,25 @@ kaigi relay config --deny-remote-cloud
 
 relay requestはlocal runへ `relay_request_id` / request hashで束縛する。途中中断したrunは新規Councilを作らずrecover対象にする。完了後remote返送だけ失敗した場合は0600 local receiptから結果を再送し、Councilを二重起動しない。
 
-relayはfull Council transcriptをcloudへ返さない。返すのは最終decision、run ID、`packet_sha256`, `transcript_sha256`。Decision packet本体とtranscriptはlocalに残る。
+relayはfull Council transcriptをcloudへ返さない。返すのは最終decision、run ID、`packet_sha256`, `transcript_sha256`。
+
+### Relay progress hardening
+
+実機で「workerは生存しているがCouncilのどのstageで待っているかcloud側から判別できない」状態を検出したため、v8 relayには `8.1-progress-watchdog` hardeningを含める。
+
+実行中はauthenticated heartbeatに、本文ではなく次の最小metadataだけを載せる。
+
+- local `run_id`
+- `stage` / `state`
+- ROUND1 / ROUND2 reply件数
+- participant件数
+- synthesizer identity
+
+Council発言本文、Decision packet、agent secretはprogress heartbeatへ含めない。`kaigi relay status` でも同じactive stageを確認できる。
+
+さらに preparation、各Council stage、全体実行に独立watchdogを置く。stageが進まないまま許容時間を超えた場合はsuccessにせず明示エラーで停止する。`kaigi relay stop` はdaemonだけでなく、そのdaemonが実行中のCouncil子processも同じprocess treeとして停止する。
+
+これにより `running` が無期限に見える状態を避け、reclaim時は既存 `relay_request_id` に束縛されたrunを `recover` する。
 
 ## Provider-neutral policy
 
@@ -124,9 +142,10 @@ Decision packetはmessage IDs、evidence transcript、capability plan、final de
 relay cloud sideのcanonical sourceをrepoにも保持する。
 
 - `relay/supabase/schema.sql`
+- `relay/supabase/migrations/001_v8_1_progress.sql`
 - `relay/supabase/functions/kaigi-relay/index.ts`
 
-pairing code / device token / service-role key等のsecretはrepoへ入れない。
+fresh deploymentはbase schemaの後に `relay/supabase/migrations/` を順番に適用する。pairing code / device token / service-role key等のsecretはrepoへ入れない。
 
 ## Install
 
