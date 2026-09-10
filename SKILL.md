@@ -40,6 +40,12 @@ Cast priority: required coverage → soft coverage → cost → online → speed
 
 `kaigi policy --json` で確認する。
 
+## Local agentchattr auth
+
+現行agentchattrのREST APIはsession tokenまたはregistered-agent Bearerを要求する。detached relay daemonがinteractive shellのauth envを持たない場合でも、kaigiはlocalhost indexへserverが注入した現行session tokenをmemory上だけで自動取得できる。
+
+優先順位は `explicit auth env → live loopback session discovery → legacy log`。live discoveryはloopback HTTPだけに限定し、非loopbackからtokenを取得しない。tokenをdiskへ保存しない。agentchattr server再起動でtokenがrotationしても次回requestで現行tokenを再取得する。
+
 ## Council / proof
 
 ROUND1=独立fan-out、ROUND2=dissent/review、FINAL=synthesis。FINAL replyを実観測した場合だけcomplete。
@@ -83,7 +89,7 @@ Relay結果はlocal Decision packet verify後だけ成功返送する。cloudへ
 
 `kaigi relay status` はactive request/run/stage/reply件数を表示する。preparation・各Council stage・全体実行には独立watchdogを置き、進行停止はsuccess扱いせず明示エラーへ落とす。
 
-`kaigi relay stop` はrelay daemonだけでなく、そのdaemon配下の実行中Council process treeも停止対象にする。再claim時は同じ `relay_request_id` に束縛されたrunをrecoverし、可能な限り二重Councilを避ける。
+`kaigi relay stop` はrelay daemonだけでなく、そのdaemon配下の実行中Council process treeも停止対象にする。claimed requestのlocal処理が例外終了した場合はremoteをterminal `failed`へ更新し、lease expiryによる無限reclaimを防ぐ。
 
 ## 成功判定
 
