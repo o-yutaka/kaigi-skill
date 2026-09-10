@@ -10,16 +10,17 @@ KAIGI_V6="$SKILL_DIR/kaigi_v6.py"
 KAIGI_POLICY="$SKILL_DIR/kaigi_policy.py"
 KAIGI_CAPS="$SKILL_DIR/kaigi_capabilities.py"
 KAIGI_RELAY="$SKILL_DIR/kaigi_relay.py"
+KAIGI_RELAY_V81="$SKILL_DIR/kaigi_relay_v81.py"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 LOCAL_BIN="$HOME/.local/bin"
 CANONICAL_SKILL="$HOME/.local/share/kaigi/skills/kaigi"
 TARGETS="${KAIGI_SKILL_TARGETS:-auto}"
 
-for file in "$KAIGI_SCRIPT" "$KAIGI_CORE" "$KAIGI_OPS" "$KAIGI_V6" "$KAIGI_POLICY" "$KAIGI_CAPS" "$KAIGI_RELAY" "$SKILL_MD"; do
+for file in "$KAIGI_SCRIPT" "$KAIGI_CORE" "$KAIGI_OPS" "$KAIGI_V6" "$KAIGI_POLICY" "$KAIGI_CAPS" "$KAIGI_RELAY" "$KAIGI_RELAY_V81" "$SKILL_MD"; do
   [[ -f "$file" ]] || { echo "エラー: $file がありません。repository一式を更新してください" >&2; exit 1; }
 done
 
-chmod +x "$KAIGI_SCRIPT" "$KAIGI_RELAY"
+chmod +x "$KAIGI_SCRIPT" "$KAIGI_RELAY" "$KAIGI_RELAY_V81"
 mkdir -p "$LOCAL_BIN"
 LINK_PATH="$LOCAL_BIN/kaigi"
 
@@ -83,13 +84,13 @@ if [[ ":${PATH}:" != *":${LOCAL_BIN}:"* ]]; then
 fi
 
 echo
-echo "kaigi v8 install complete — provider-neutral / capability-aware / relay-ready"
+echo "kaigi v8 install complete — provider-neutral / capability-aware / relay-progress-ready"
 echo "  kaigi \"議題\"                                      # capability cast→Council→proof"
 echo "  kaigi cast \"議題\"                                 # 副作用なしでcast確認"
 echo "  kaigi caps                                          # capability registry"
 echo "  kaigi relay pair --url URL                         # single-use codeで端末pair"
-echo "  kaigi relay start                                  # outbound polling daemon開始"
-echo "  kaigi relay status                                 # relay状態"
+echo "  kaigi relay start                                  # hardened outbound polling daemon開始"
+echo "  kaigi relay status                                 # relay + active Council stage"
 echo "  kaigi decide \"議題\" --need coding,red-team      # 必須能力を固定"
 echo "  kaigi policy                                        # provider-neutral policy確認"
 echo "  kaigi recover                                       # 再照合→再開→packet"
