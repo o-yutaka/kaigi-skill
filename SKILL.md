@@ -1,42 +1,77 @@
 ---
 name: kaigi
-description: agentchattr のマルチエージェント会議をターミナルから確認・参加・発言・監視・起動・診断する。ユーザーが「会議を見て」「kaigiを使って」「他のエージェントに聞いて」「@claudeへ伝えて」など、agentchattr上の会議や複数AIとのやり取りを求めた時に使う。
+description: agentchattr のマルチエージェント会議を操作する。会議確認・発言・監視・招集・複数AIの独立分析/反論/統合、Claude/Codex/ChatGPT等への問い合わせが必要な時に使う。
 ---
 # kaigi
 
-`kaigi` CLI を使って agentchattr の会議を操作する。
+`kaigi` CLI で agentchattr 会議を操作する。
 
-## 最短操作
+## 優先操作
 
-- `kaigi` — 会議室へ入る。停止中なら自動起動する。
-- `kaigi @claude これ見て` — サブコマンド無しでそのまま発言する。
-- `kaigi log 30` — 直近30件を見る。
-- `kaigi watch` — 新着をライブ表示する。
-- `kaigi status` — サーバー/API/最近発言したエージェントを確認する。
-- `kaigi doctor` — 接続・配置・認証を診断する。
-- `kaigi open` — Web UI を開く。
+- `kaigi` — interactive room。server停止時は自動起動。
+- `kaigi @NAME 本文` — そのエージェントへ即送信。
+- `kaigi convene "議題"` — Council会議を開始。通常の複数AI検討はこれを優先。
+- `kaigi agents` — online/status確認。
+- `kaigi log 30` — 履歴。
+- `kaigi watch` — 継続監視。
+- `kaigi doctor` — 接続・配置・認証診断。
 
-## エージェントとして使う時
+## Council
 
-会議内容の確認だけなら `kaigi log 30` を使う。継続監視が必要なら `kaigi watch`。発言を求められたら `kaigi @name 本文` または `kaigi say 本文` を使う。
+`kaigi convene` の既定モード。online agentを原則全員使う。
 
-`status` の `recent` は「最近のメッセージに現れた sender」であり、厳密なオンラインpresenceとして扱わない。実際に送信・取得できた結果だけを成功として報告する。
+1. ROUND 1: 全参加者を同時にtriggerし、独立分析を収集。
+2. ROUND 2: 応答者を同時にtriggerし、相互批判・反証・修正を収集。
+3. FINAL: synthesizerが全ログを比較し、最終判断へ統合。
 
-## 会議室内コマンド
+役割は `planner`, `red-team`, `implementer`, `evidence`, `ux`, `long-horizon`。ユーザーが対象を指定した場合だけ `--agents claude,codex,chatgpt` を使う。指定がなければonline全員を使う。
 
-`kaigi` で入室後:
-- `/quit` — 終了
-- `/status` — 状態確認
-- `/log [N]` — 履歴表示
-- `/to NAME TEXT` — `@NAME TEXT` として送信
+必要なら `--quorum N`, `--max-agents N`, `--synth NAME`, `--round-timeout SEC` を使う。
 
-## 設定
+## Native Sessions
 
-必要な場合だけ環境変数で上書きする。
-- `AGENTCHATTR_SERVER` — 既定 `http://127.0.0.1:8300`
-- `AGENTCHATTR_HOME` — 既定 `~/agentchattr`
-- `AGENTCHATTR_LOG` — 既定 `/tmp/agentchattr-server.log`
-- `KAIGI_CHANNEL` — 既定 `general`
-- `KAIGI_WRAPPER` — 既定 `lmstudio`
-- `KAIGI_TOKEN` — session token を明示指定
-- `KAIGI_BEARER_TOKEN` — agent bearer token を明示指定
+上流agentchattrの構造化Sessionを明示的に使う場合:
+
+- `--template planning`
+- `--template debate`
+- `--template code-review`
+- `--template design-critique`
+- `kaigi templates` で利用可能template確認
+
+役割固定が必要なら `--cast role=agent` を複数指定する。
+
+## ChatGPT bridge
+
+ChatGPTをAPI agentとして追加する場合:
+
+```bash
+kaigi chatgpt setup
+```
+
+これは `AGENTCHATTR_HOME/config.local.toml` に `[agents.chatgpt]` を追加し、APIキーそのものは保存しない。実行環境に `OPENAI_API_KEY` が必要。agentchattr再起動後に `kaigi chatgpt start`、状態は `kaigi chatgpt status`。
+
+現在のChatGPT Web/Appセッションを流用したと報告してはいけない。このbridgeはOpenAI-compatible API経路。
+
+## 成功判定
+
+送信/API応答・Session start・実際のagent replyなど観測できたものだけ成功とする。online一覧は `/api/status` を使う。Councilでは応答がないagentを応答済みとして扱わない。
+
+## room内
+
+- `/convene TOPIC`
+- `/agents`
+- `/to NAME TEXT`
+- `/log [N]`
+- `/status`
+- `/quit`
+
+## 環境変数
+
+- `AGENTCHATTR_SERVER` — default `http://127.0.0.1:8300`
+- `AGENTCHATTR_HOME` — default `~/agentchattr`
+- `AGENTCHATTR_LOG` — default `/tmp/agentchattr-server.log`
+- `KAIGI_CHANNEL` — default `general`
+- `KAIGI_WRAPPER` — default `lmstudio`
+- `KAIGI_TOKEN` — session token override
+- `KAIGI_BEARER_TOKEN` — agent bearer token override
+- `KAIGI_CHATGPT_MODEL` — ChatGPT bridge model override
