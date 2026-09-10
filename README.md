@@ -1,6 +1,8 @@
-# kaigi v6
+# kaigi v7
 
-agentchattr のマルチAI会議を、`AI選定/起動 → 独立案 → 反証 → 最終統合 → 永続run → 再開 → proof packet → handoff` まで1本で扱う provider-neutral terminal CLI。
+agentchattr のマルチAI会議を、`能力推定/選定 → AI準備 → 独立案 → 反証 → 最終統合 → 永続run → 再開 → proof packet → advisory handoff` まで1本で扱うterminal CLI。
+
+**特定AI providerへの依存はありません。** Claude / Codex / ChatGPT / Hermes / ローカルモデル等はすべてoptional adapterです。provider名はidentityとして扱い、safe-autoの優先順位には使いません。
 
 ## 最短
 
@@ -11,119 +13,152 @@ bash install.sh
 kaigi "この設計を本番採用すべきか"
 ```
 
-`@agent` で始まらないbare textはsafe-auto Councilとして扱います。個別送信は明示します。
+`@agent` で始まらないbare textは会議議題です。v7では議題から必要そうなcapabilityをsoft推定し、登録済み能力・コスト・online状態・speed・実測response reliabilityからcastを組みます。
 
 ```bash
+kaigi "このPRのセキュリティと実装をレビュー"
 kaigi @agent-a この差分だけ見て
 kaigi say "general channelへ単発送信"
 ```
 
-## Provider-neutral contract
+## Capability Registry
 
-kaigi本体が必須とするAI providerは **0** です。Claude / Codex / ChatGPT / Gemini / Hermes / local model等はすべて同格のoptional adapterであり、どれか1つが無くてもcontrol planeは成立します。
-
-確認:
+登録先は既定 `~/.config/kaigi/capabilities.json`。`KAIGI_CONFIG_DIR` / `KAIGI_CAPABILITY_REGISTRY` で変更できます。
 
 ```bash
-kaigi policy
-kaigi policy --json
+kaigi caps
+kaigi caps show local-a --json
+kaigi caps set local-a coding research deep-reasoning --cost local --speed fast --context 24576
+kaigi caps set reviewer red-team research --cost free --speed normal
+kaigi caps infer "このPRの安全性を調査して実装修正"
+kaigi caps unset local-a
 ```
 
-主要不変条件:
+標準capability例:
 
-- `required_providers = []`
-- safe-autoにprovider名の固定優先順位を持たせない
-- FINAL synthesizerにprovider名の固定優先順位を持たせない
-- cloud APIを暗黙起動/暗黙参加させない
-- provider固有skill directoryをruntime依存にしない
+- `coding`
+- `research`
+- `red-team`
+- `vision`
+- `long-context`
+- `local-free`
+- `fast`
+- `deep-reasoning`
 
-既定synth policyは `balanced`。complete済みrunをnewest-firstで見て、現在の参加者のうち最も最近FINAL担当していないAIを優先します。never-usedが複数なら参加順で決めます。
+任意の拡張capability名も登録できます。agent名から能力を推測しません。registry / agent config / runtime factだけを使います。
+
+## Castだけ確認
+
+会議・起動・送信をせずcastだけ計算:
 
 ```bash
-KAIGI_SYNTH_AGENT=agent-b kaigi "議題"    # 明示固定
-KAIGI_SYNTH_POLICY=first kaigi "議題"     # 参加順先頭
+kaigi cast "このPRを本番投入していいか"
+kaigi cast "このPRをレビュー" --need coding,red-team --max-agents 3
+kaigi cast "調査" --prefer research,long-context --free-only
+kaigi cast "画像UIを確認" --need vision --json
 ```
 
-## Safe-auto governance
+選定順序は概念的に:
 
-`kaigi "議題"` / `kaigi decide "議題"` は、config + `/api/status` から候補を分類します。選定基準はブランド名ではなくruntime属性です。
+```text
+required capability coverage
+→ inferred/preferred capability coverage
+→ cost (free/local優先)
+→ already online
+→ speed
+→ observed response reliability
+→ deterministic tie-break
+```
 
-優先順位:
+選ばれたagentはCouncilの `planner / red-team / implementer / evidence / ux / long-horizon` roleに対する能力適合が高くなるよう並べ替えます。
 
-1. online実観測済み > offline
-2. local API > CLI > 明示許可されたcloud API > 明示許可されたunclassified online
-3. 同条件だけagent名を決定論的tie-breakに使用
+## Hard / soft capability
+
+議題からの自動推定はsoftです。登録が足りなくても、それだけで会議を拒否しません。
+
+一方 `--need` はhard requirementです。
+
+```bash
+kaigi decide "この変更を監査" --need coding,red-team
+```
+
+指定capabilityをcast全体でcoverできなければfail-closedします。明示的に妥協する場合だけ:
+
+```bash
+kaigi decide "この変更を監査" --need vision --best-effort-capabilities
+```
+
+コスト制約:
+
+```bash
+kaigi decide "実装案" --need coding --free-only
+```
+
+`--free-only` はregistry上 `cost=free` または local API由来の `cost=local` のagentだけを候補にします。
+
+## Provider-neutral safe-auto
 
 既定:
 
 - local API: 自動候補、自動wake可
-- CLI agent: 自動候補、offlineなら通常 `wrapper.py` で起動可
-- cloud API: 自動候補から除外
-- configで分類不能なonline participant: 自動候補から除外
-- `user`, `system`, bot: 除外
-
-確認のみ:
+- CLI agent: 自動候補、offlineならupstream通常`wrapper.py`で起動可
+- cloud API: 暗黙候補から除外
+- configで分類不能なonline agent: 既定除外
+- system/user/bot: 除外
+- provider名による優先順位: なし
+- synthesizer: balanced（最近FINAL担当していない参加者を優先）
 
 ```bash
+kaigi policy --json
 kaigi decide "議題" --dry-run
-```
-
-cloud APIを明示許可:
-
-```bash
 kaigi decide "議題" --allow-cloud
+kaigi decide "議題" --agents agent-a,agent-b
+kaigi decide "議題" --synth agent-b
 ```
 
-参加者を明示固定:
-
-```bash
-kaigi decide "議題" --agents agent-a,agent-b,local-llm
-```
-
-制御:
-
-```bash
-kaigi decide "議題" --max-agents 6
-kaigi decide "議題" --min-agents 2
-kaigi decide "議題" --quorum 2
-kaigi decide "議題" --synth agent-a
-kaigi decide "議題" --round-timeout 90
-kaigi decide "議題" --no-launch
-kaigi decide "議題" --no-packet
-```
+cloud APIは `--allow-cloud` や明示 `--agents` 等、ユーザーが明示した場合だけ準備対象にできます。
 
 ## Council
 
-Councilは3段です。
+1. ROUND 1 — 全参加者を同時triggerし独立分析。
+2. ROUND 2 — 実応答者だけを同時triggerし、反証・危険な前提・見落とし・修正版を出す。
+3. FINAL — synthesizerが全ログを比較し `DECISION / WHY / DISSENT / RISKS / NEXT ACTIONS` へ統合。
 
-1. ROUND 1 — 全参加者を同時triggerし、他者を待たず独立分析。
-2. ROUND 2 — 実際に返答した参加者だけを同時triggerし、反証・危険な前提・見落とし・修正版を出す。
-3. FINAL — provider-neutral synth policyで選ばれた参加者が全ログを比較し `DECISION / WHY / DISSENT / RISKS / NEXT ACTIONS` へ統合。
+FINAL replyを実観測した場合だけcomplete。各outbound messageは `RUN=<run_id>` とmessage IDで再照合できます。
 
-FINAL replyを実観測した場合だけcompleteです。各outbound markerには `RUN=<run_id>` が入り、message IDと組み合わせて再照合できます。
+v7 safe-autoで作ったrunには `capability_plan` も保存します。そこにはrequired/preferred/inferred capability、実際のcast、各agent profile、coverage、registry SHA256、selection policyをsnapshotします。
 
 ## Proof packet
 
-complete Councilは `~/.local/state/kaigi/packets/<run_id>.json` に `kaigi.decision_packet.v1` として保存できます。safe-auto完走時は自動生成されます。
+complete Councilは `~/.local/state/kaigi/packets/<run_id>.json` にDecision packet化されます。
 
 ```bash
-kaigi packet [RUN_ID]
-kaigi verify [RUN_ID]
-kaigi verify [RUN_ID] --live
+kaigi packet
+kaigi verify
+kaigi verify RUN_ID --live
 ```
 
-packetはrun ID/topic/participants/roles/synth、ROUND1/ROUND2/FINALの実message IDs、evidence transcript、final decision、`transcript_sha256`、`packet_sha256` を束縛します。
+packetはrun/topic/participants/roles/synth、ROUND1/ROUND2/FINAL message IDs、evidence transcript、final decision、`transcript_sha256`、`packet_sha256`を束縛します。v7 capability runでは `capability_plan` もpacket hashの対象です。
 
-`verify` はlocal packet hash・transcript hash・run ledger pointer/final整合を検証します。`--live` は同message IDsをagentchattrから再取得し、live transcriptまで再照合します。
+`--live` はagentchattrから同じmessage IDsを再取得してtranscript hashまで再照合します。
 
-## Authority boundary / Handoff
+## Recovery
 
 ```bash
-kaigi handoff [RUN_ID]
-kaigi handoff [RUN_ID] --stdout
+kaigi reconcile [RUN_ID]   # read-only再照合。新規送信なし
+kaigi resume [RUN_ID]      # 不足stageだけ続行
+kaigi recover [RUN_ID]     # reconcile→resume→completeならpacketまで
 ```
 
-handoffはDecision packet hashに束縛されますが、権限は固定です。
+既存ROUND2/FINAL markerを二重送信しません。
+
+## Advisory handoff
+
+```bash
+kaigi handoff RUN_ID --stdout
+```
+
+`kaigi.handoff.v1` はDecision packet hashへ束縛されます。capability planが存在すればhandoffにも含まれます。ただし権限は常に:
 
 ```text
 authority.classification = advisory
@@ -131,64 +166,29 @@ execution_authorized = false
 requires_separate_authority = true
 ```
 
-つまり **Evidence / Decision ≠ Authority / Execution** を維持します。
+会議の結論と実行権限は別です。
 
-## Recovery
-
-```bash
-kaigi reconcile [RUN_ID]   # chat実績だけ再照合。新規sendなし
-kaigi resume [RUN_ID]      # 不足stageだけ続行
-kaigi recover [RUN_ID]     # reconcile→resume→completeならpacketまで
-```
-
-既存 `RUN=<run_id>` markerとmessage IDsを確認し、送信済みROUND2/FINALを二重送信しません。
-
-## Result / Audit
-
-```bash
-kaigi result [RUN_ID]
-kaigi history 50
-kaigi export RUN_ID --format json -o result.json
-kaigi audit
-```
-
-## CLI / API adapters
-
-CLI agentはupstream agentchattrの通常 `wrapper.py AGENT` を使います。独自provider runnerやskip-permissions / bypass / yolo launcherを自動選択しません。
+## CLI/API agents
 
 ```bash
 kaigi launch agent-a agent-b
 kaigi launch --all
-kaigi launch agent-a --dry-run
-```
-
-OpenAI-compatible API agentはgenericに追加できます。
-
-```bash
-kaigi api add local-llm --base-url http://127.0.0.1:8080/v1 --model my-model
+kaigi wake
+kaigi api add local-a --base-url http://127.0.0.1:8080/v1 --model my-model
 kaigi api list
-kaigi api start local-llm
 ```
 
-secret値はconfig/repositoryへ保存せず、環境変数名だけ保持します。
+CLIはupstream `wrapper.py AGENT`、API agentはupstream `wrapper_api.py` を使います。skip-permissions / bypass / yolo系launcherを自動選択しません。
 
-ChatGPT bridgeもoptional adapterです。Web/App/Plus session流用ではなくAPI経路であり、ChatGPTが無くてもkaigi本体は動作します。
+OpenAI-compatible cloud endpointもoptional adapterとして追加できますが、secret値は保存せず環境変数名だけ保持します。
+
+## Install
 
 ```bash
-export OPENAI_API_KEY="..."
-kaigi chatgpt setup
-kaigi chatgpt start
+bash install.sh
 ```
 
-## Skill install
-
-canonical provider-neutral skillは常にここへ入ります。
-
-```text
-~/.local/share/kaigi/skills/kaigi/SKILL.md
-```
-
-Claude / Hermes / Codex / OpenCode等のtool固有skill locationはoptional adapterです。既定 `auto` では既存環境またはCLIが検出された場合だけ配置します。
+canonical skillは `~/.local/share/kaigi/skills/kaigi/` に常時配置。provider/tool固有skill locationはauto-detectされた場合だけoptional adapterとして配置します。
 
 ```bash
 KAIGI_SKILL_TARGETS=none bash install.sh
@@ -196,24 +196,4 @@ KAIGI_SKILL_TARGETS=codex,opencode bash install.sh
 KAIGI_SKILL_TARGETS=all bash install.sh
 ```
 
-`none` ではcanonical skillだけ入り、provider固有directoryを作りません。
-
-## Native Sessions / room
-
-既存の低レベル操作も維持します。
-
-```bash
-kaigi convene "議題"
-kaigi templates
-kaigi convene "実装計画" --template planning
-kaigi room
-kaigi log 30
-kaigi watch
-kaigi agents
-kaigi doctor
-kaigi open
-```
-
-## Verification
-
-GitHub ActionsはPython compile、全unit regression、no-provider-name E2E、provider-neutral installerの2回冪等実行、optional adapter installを検証します。GUI terminal spawnや外部provider実replyなどCIで観測していないものはPASS扱いしません。
+主な環境変数: `AGENTCHATTR_HOME`, `AGENTCHATTR_SERVER`, `KAIGI_STATE_DIR`, `KAIGI_CONFIG_DIR`, `KAIGI_CAPABILITY_REGISTRY`, `KAIGI_AUTO_MAX_AGENTS`, `KAIGI_AUTO_MIN_AGENTS`, `KAIGI_SYNTH_POLICY`。Python 3.11+ 推奨。

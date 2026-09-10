@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# kaigi v6 installer — provider-neutral, idempotent
+# kaigi v7 installer — provider-neutral, capability-aware, idempotent
 set -euo pipefail
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,12 +8,13 @@ KAIGI_CORE="$SKILL_DIR/kaigi_core.py"
 KAIGI_OPS="$SKILL_DIR/kaigi_ops.py"
 KAIGI_V6="$SKILL_DIR/kaigi_v6.py"
 KAIGI_POLICY="$SKILL_DIR/kaigi_policy.py"
+KAIGI_CAPS="$SKILL_DIR/kaigi_capabilities.py"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 LOCAL_BIN="$HOME/.local/bin"
 CANONICAL_SKILL="$HOME/.local/share/kaigi/skills/kaigi"
 TARGETS="${KAIGI_SKILL_TARGETS:-auto}"
 
-for file in "$KAIGI_SCRIPT" "$KAIGI_CORE" "$KAIGI_OPS" "$KAIGI_V6" "$KAIGI_POLICY" "$SKILL_MD"; do
+for file in "$KAIGI_SCRIPT" "$KAIGI_CORE" "$KAIGI_OPS" "$KAIGI_V6" "$KAIGI_POLICY" "$KAIGI_CAPS" "$SKILL_MD"; do
   [[ -f "$file" ]] || { echo "エラー: $file がありません。repository一式を更新してください" >&2; exit 1; }
 done
 
@@ -67,8 +68,7 @@ install_optional() {
   fi
 }
 
-# Canonical skill is the only mandatory install target. Tool/provider-specific
-# locations are optional adapters and are never prerequisites for kaigi.
+# Canonical skill is mandatory. Provider/tool locations are optional adapters.
 install_skill "$CANONICAL_SKILL"
 install_optional "claude" "$HOME/.claude" "claude" "$HOME/.claude/skills/kaigi"
 install_optional "hermes" "$HOME/.hermes" "hermes" "$HOME/.hermes/skills/kaigi"
@@ -82,26 +82,25 @@ if [[ ":${PATH}:" != *":${LOCAL_BIN}:"* ]]; then
 fi
 
 echo
-echo "kaigi v6 install complete — provider-neutral"
-echo "  kaigi \"議題\"                           # safe-auto→Council→proof packet"
-echo "  kaigi @agent-a これ見て                 # 個別agentへ即送信"
-echo "  kaigi decide \"議題\" --dry-run          # 自動選定だけ確認"
-echo "  kaigi decide \"議題\" --allow-cloud      # cloud APIも候補に許可"
-echo "  kaigi policy                           # provider-neutral policy確認"
-echo "  kaigi recover                          # 再照合→再開→packet"
-echo "  kaigi result                           # 最新の最終結論"
-echo "  kaigi verify --live                    # packet/ledger/live transcript検証"
-echo "  kaigi handoff                          # 非権限advisory packet生成"
-echo "  kaigi audit                            # 保存run/proof監査"
-echo "  kaigi launch agent-a agent-b           # CLI AIを新terminalへ起動"
-echo "  kaigi agents                           # online + 設定AI"
-echo "  kaigi doctor                           # 診断"
+echo "kaigi v7 install complete — provider-neutral / capability-aware"
+echo "  kaigi \"議題\"                                      # capability cast→Council→proof"
+echo "  kaigi cast \"議題\"                                 # 副作用なしでcastだけ確認"
+echo "  kaigi caps                                          # agent能力/コスト/応答率一覧"
+echo "  kaigi caps set local-a coding research --cost local --speed fast"
+echo "  kaigi decide \"議題\" --need coding,red-team      # 必須能力を固定"
+echo "  kaigi decide \"議題\" --need coding --free-only  # free/localだけ"
+echo "  kaigi decide \"議題\" --dry-run                   # 選定だけ確認"
+echo "  kaigi policy                                        # provider-neutral policy確認"
+echo "  kaigi recover                                       # 再照合→再開→packet"
+echo "  kaigi result                                        # 最新の最終結論"
+echo "  kaigi verify --live                                 # packet/ledger/live transcript検証"
+echo "  kaigi handoff                                       # 非権限advisory packet生成"
+echo "  kaigi audit                                         # 保存run/proof監査"
 echo
-echo "Skill adapters: auto-detect. Canonical skill is always installed."
+echo "Capability registry: ${KAIGI_CAPABILITY_REGISTRY:-${KAIGI_CONFIG_DIR:-$HOME/.config/kaigi}/capabilities.json}"
+echo "Provider-specific skill adapters are optional:"
 echo "  KAIGI_SKILL_TARGETS=none bash install.sh"
 echo "  KAIGI_SKILL_TARGETS=codex,opencode bash install.sh"
 echo "  KAIGI_SKILL_TARGETS=all bash install.sh"
 echo
-echo "Optional ChatGPT API adapter:"
-echo "  export OPENAI_API_KEY=..."
-echo "  kaigi chatgpt setup"
+echo "Optional OpenAI-compatible API agents remain adapters; no named provider is required."
