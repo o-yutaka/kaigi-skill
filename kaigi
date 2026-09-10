@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""kaigi v2 — terminal-first client for agentchattr."""
-
+"""kaigi v3 — terminal-first multi-agent meeting client for agentchattr."""
 from __future__ import annotations
 
 import argparse
@@ -19,7 +18,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-VERSION = "2.0.0"
+VERSION = "3.0.0"
 SERVER_URL = os.environ.get("AGENTCHATTR_SERVER", "http://127.0.0.1:8300").rstrip("/")
 HOME = pathlib.Path(os.environ.get("AGENTCHATTR_HOME", str(pathlib.Path.home() / "agentchattr"))).expanduser()
 LOG_FILE = pathlib.Path(os.environ.get("AGENTCHATTR_LOG", "/tmp/agentchattr-server.log")).expanduser()
@@ -28,6 +27,7 @@ WRAPPER_PID_FILE = pathlib.Path(os.environ.get("KAIGI_WRAPPER_PID", "/tmp/kaigi-
 DEFAULT_CHANNEL = os.environ.get("KAIGI_CHANNEL", "general")
 DEFAULT_WRAPPER = os.environ.get("KAIGI_WRAPPER", "lmstudio")
 DEFAULT_INTERVAL = float(os.environ.get("KAIGI_POLL_INTERVAL", "1.0"))
+DEFAULT_CHATGPT_MODEL = os.environ.get("KAIGI_CHATGPT_MODEL", "gpt-5.6")
 NO_COLOR = bool(os.environ.get("NO_COLOR")) or not sys.stdout.isatty()
 
 RESET = "" if NO_COLOR else "\033[0m"
@@ -77,33 +77,25 @@ def resolve_token() -> tuple[str | None, str]:
 def auth_headers() -> dict[str, str]:
     token, source = resolve_token()
     headers: dict[str, str] = {"Accept": "application/json"}
-    if not token:
-        return headers
-    if source == "bearer-env":
-        headers["Authorization"] = f"Bearer {token}"
-    else:
-        headers["X-Session-Token"] = token
+    if token:
+        if source == "bearer-env":
+            headers["Authorization"] = f"Bearer {token}"
+        else:
+            headers["X-Session-Token"] = token
     return headers
 
 
-def request_json(
-    method: str,
-    path: str,
-    *,
-    params: dict[str, Any] | None = None,
-    payload: dict[str, Any] | None = None,
-    timeout: float = 5.0,
-) -> Any:
+def request_json(method: str, path: str, *, params: dict[str, Any] | None = None,
+                 payload: dict[str, Any] | None = None, timeout: float = 5.0) -> Any:
     query = ""
     if params:
         query = "?" + urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
-    url = f"{SERVER_URL}{path}{query}"
     headers = auth_headers()
     data = None
     if payload is not None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    req = urllib.request.Request(f"{SERVER_URL}{path}{query}", data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
@@ -115,9 +107,7 @@ def request_json(
                 return raw.decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace").strip()
-        hint = ""
-        if exc.code in (401, 403):
-            hint = " 認証トークンを確認してください。"
+        hint = " 認証トークンを確認してください。" if exc.code in (401, 403) else ""
         raise KaigiError(f"HTTP {exc.code} {path}: {body or exc.reason}.{hint}") from exc
     except urllib.error.URLError as exc:
         raise KaigiError(f"agentchattr に接続できません: {exc.reason}") from exc
@@ -125,8 +115,7 @@ def request_json(
 
 def server_alive(timeout: float = 0.8) -> bool:
     try:
-        req = urllib.request.Request(f"{SERVER_URL}/", method="GET")
-        with urllib.request.urlopen(req, timeout=timeout):
+        with urllib.request.urlopen(urllib.request.Request(f"{SERVER_URL}/", method="GET"), timeout=timeout):
             return True
     except urllib.error.HTTPError:
         return True
@@ -143,28 +132,18 @@ def python_bin() -> pathlib.Path | None:
 
 def wrapper_running(name: str) -> bool:
     pgrep = shutil.which("pgrep")
-    if not pgrep:
-        return False
-    pattern = f"wrapper_api.py {name}"
-    return subprocess.run([pgrep, "-f", pattern], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    return bool(pgrep and subprocess.run([pgrep, "-f", f"wrapper_api.py {name}"], stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL).returncode == 0)
 
 
 def launch_wrapper(name: str, log_handle: Any) -> int | None:
     if not name or name.lower() in {"none", "off", "false", "0"}:
         return None
-    wrapper = HOME / "wrapper_api.py"
-    py = python_bin()
-    if not wrapper.is_file() or not py:
+    wrapper, py = HOME / "wrapper_api.py", python_bin()
+    if not wrapper.is_file() or not py or wrapper_running(name):
         return None
-    if wrapper_running(name):
-        return None
-    proc = subprocess.Popen(
-        [str(py), str(wrapper), name],
-        cwd=str(HOME),
-        stdout=log_handle,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
+    proc = subprocess.Popen([str(py), str(wrapper), name], cwd=str(HOME), stdout=log_handle,
+                            stderr=subprocess.STDOUT, start_new_session=True)
     WRAPPER_PID_FILE.write_text(str(proc.pid), encoding="utf-8")
     return proc.pid
 
@@ -175,62 +154,37 @@ def start_server(*, wrapper: str | None = None, quiet: bool = False) -> None:
             print(f"{GREEN}✓{RESET} agentchattr は既に起動中  {DIM}{SERVER_URL}{RESET}")
         if wrapper:
             LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with LOG_FILE.open("a", encoding="utf-8") as log_handle:
-                pid = launch_wrapper(wrapper, log_handle)
+            with LOG_FILE.open("a", encoding="utf-8") as h:
+                pid = launch_wrapper(wrapper, h)
             if pid and not quiet:
                 print(f"{GREEN}✓{RESET} wrapper {wrapper} を起動 (pid {pid})")
         return
-
-    run_py = HOME / "run.py"
-    py = python_bin()
+    run_py, py = HOME / "run.py", python_bin()
     if not run_py.is_file():
         raise KaigiError(f"agentchattr が見つかりません: {run_py}\nAGENTCHATTR_HOME で場所を指定できます。")
     if not py:
         raise KaigiError(f"agentchattr の Python venv が見つかりません: {HOME}/.venv または {HOME}/venv")
-
     if not quiet:
         print(f"{CYAN}▶{RESET} agentchattr を起動しています…")
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    env = os.environ.copy()
-    env.pop("TMUX", None)
-    with LOG_FILE.open("w", encoding="utf-8") as log_handle:
-        proc = subprocess.Popen(
-            [str(py), str(run_py)],
-            cwd=str(HOME),
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            env=env,
-            start_new_session=True,
-        )
+    env = os.environ.copy(); env.pop("TMUX", None)
+    with LOG_FILE.open("w", encoding="utf-8") as h:
+        proc = subprocess.Popen([str(py), str(run_py)], cwd=str(HOME), stdout=h, stderr=subprocess.STDOUT,
+                                env=env, start_new_session=True)
         PID_FILE.write_text(str(proc.pid), encoding="utf-8")
-
     deadline = time.time() + 20
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            break
-        if server_alive():
-            break
+    while time.time() < deadline and proc.poll() is None and not server_alive():
         time.sleep(0.4)
-
     if not server_alive():
-        tail = ""
         try:
-            lines = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
-            tail = "\n".join(lines[-8:])
+            tail = "\n".join(LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()[-8:])
         except OSError:
-            pass
+            tail = ""
         raise KaigiError(f"agentchattr の起動に失敗しました。\n{tail}".rstrip())
-
     wrapper_name = DEFAULT_WRAPPER if wrapper is None else wrapper
     if wrapper_name:
-        with LOG_FILE.open("a", encoding="utf-8") as log_handle:
-            launch_wrapper(wrapper_name, log_handle)
-
-    for _ in range(20):
-        token, _ = resolve_token()
-        if token:
-            break
-        time.sleep(0.1)
+        with LOG_FILE.open("a", encoding="utf-8") as h:
+            launch_wrapper(wrapper_name, h)
     if not quiet:
         print(f"{GREEN}✓{RESET} 起動完了  {DIM}{SERVER_URL}{RESET}")
 
@@ -252,13 +206,11 @@ def stop_pidfile(path: pathlib.Path, expected_fragment: str) -> bool:
     if not pid:
         return False
     try:
-        cmdline = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", errors="replace")
+        cmdline = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
     except OSError:
-        path.unlink(missing_ok=True)
-        return False
+        path.unlink(missing_ok=True); return False
     if expected_fragment not in cmdline:
-        path.unlink(missing_ok=True)
-        return False
+        path.unlink(missing_ok=True); return False
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -268,13 +220,7 @@ def stop_pidfile(path: pathlib.Path, expected_fragment: str) -> bool:
 
 
 def stop_server() -> bool:
-    stopped_wrapper = stop_pidfile(WRAPPER_PID_FILE, "wrapper_api.py")
-    stopped_server = stop_pidfile(PID_FILE, "run.py")
-    if stopped_server:
-        deadline = time.time() + 5
-        while time.time() < deadline and server_alive():
-            time.sleep(0.2)
-    return stopped_server or stopped_wrapper
+    return stop_pidfile(WRAPPER_PID_FILE, "wrapper_api.py") or stop_pidfile(PID_FILE, "run.py")
 
 
 def normalize_messages(data: Any) -> list[dict[str, Any]]:
@@ -282,23 +228,32 @@ def normalize_messages(data: Any) -> list[dict[str, Any]]:
         return [m for m in data if isinstance(m, dict)]
     if isinstance(data, dict):
         for key in ("messages", "data", "items"):
-            value = data.get(key)
-            if isinstance(value, list):
-                return [m for m in value if isinstance(m, dict)]
+            if isinstance(data.get(key), list):
+                return [m for m in data[key] if isinstance(m, dict)]
     return []
 
 
 def fetch_messages(*, limit: int | None = None, since_id: Any = None) -> list[dict[str, Any]]:
-    params: dict[str, Any] = {}
-    if limit is not None:
-        params["limit"] = limit
-    if since_id is not None:
-        params["since_id"] = since_id
-    return normalize_messages(request_json("GET", "/api/messages", params=params))
+    return normalize_messages(request_json("GET", "/api/messages", params={"limit": limit, "since_id": since_id}))
 
 
 def send_message(text: str, channel: str = DEFAULT_CHANNEL) -> Any:
     return request_json("POST", "/api/send", payload={"text": text, "channel": channel})
+
+
+def fetch_status() -> dict[str, Any]:
+    data = request_json("GET", "/api/status")
+    return data if isinstance(data, dict) else {}
+
+
+def online_agents(status: dict[str, Any] | None = None) -> list[str]:
+    status = fetch_status() if status is None else status
+    return [str(name) for name, info in status.items() if isinstance(info, dict) and info.get("available")]
+
+
+def fetch_templates() -> list[dict[str, Any]]:
+    data = request_json("GET", "/api/sessions/templates")
+    return [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
 
 
 def msg_id(msg: dict[str, Any]) -> Any:
@@ -306,28 +261,22 @@ def msg_id(msg: dict[str, Any]) -> Any:
 
 
 def latest_id(messages: list[dict[str, Any]], fallback: Any = -1) -> Any:
-    if not messages:
-        return fallback
-    return msg_id(messages[-1])
+    return msg_id(messages[-1]) if messages else fallback
 
 
 def format_time(value: Any) -> str:
-    if value is None:
-        return "--:--"
     if isinstance(value, (int, float)):
         try:
             if value > 10_000_000_000:
-                value = value / 1000
+                value /= 1000
             return dt.datetime.fromtimestamp(value).strftime("%H:%M")
         except Exception:
-            return "--:--"
+            pass
     if isinstance(value, str):
         try:
-            parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return parsed.astimezone().strftime("%H:%M")
+            return dt.datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone().strftime("%H:%M")
         except Exception:
-            if len(value) >= 5 and ":" in value:
-                return value[-8:-3] if len(value) >= 8 else value[:5]
+            pass
     return "--:--"
 
 
@@ -336,16 +285,11 @@ def render_message(msg: dict[str, Any], *, show_channel: bool = False) -> str:
     text = str(msg.get("text") or msg.get("content") or "")
     stamp = format_time(msg.get("timestamp", msg.get("created_at")))
     channel = str(msg.get("channel") or DEFAULT_CHANNEL)
-    color = sender_color(sender)
-    prefix = f"{DIM}{stamp}{RESET} {color}{BOLD}{sender}{RESET}"
+    prefix = f"{DIM}{stamp}{RESET} {sender_color(sender)}{BOLD}{sender}{RESET}"
     if show_channel and channel != DEFAULT_CHANNEL:
         prefix += f" {DIM}#{channel}{RESET}"
     lines = text.splitlines() or [""]
-    first = f"{prefix}: {lines[0]}"
-    if len(lines) == 1:
-        return first
-    indent = " " * (len(stamp) + 2)
-    return first + "\n" + "\n".join(f"{indent}{line}" for line in lines[1:])
+    return f"{prefix}: {lines[0]}" + ("" if len(lines) == 1 else "\n" + "\n".join("       " + x for x in lines[1:]))
 
 
 def print_messages(messages: list[dict[str, Any]], *, channel: str | None = None) -> None:
@@ -355,81 +299,69 @@ def print_messages(messages: list[dict[str, Any]], *, channel: str | None = None
         print(render_message(msg, show_channel=channel is None))
 
 
-def recent_agents(messages: list[dict[str, Any]]) -> list[str]:
-    seen: list[str] = []
-    for msg in reversed(messages):
-        sender = str(msg.get("sender") or "").strip()
-        if sender and sender.lower() not in {"user", "system"} and sender not in seen:
-            seen.append(sender)
-    return list(reversed(seen[:12]))
-
-
 def cmd_status(_args: argparse.Namespace) -> int:
     alive = server_alive()
     print(f"server   : {GREEN + 'UP' + RESET if alive else RED + 'DOWN' + RESET}  {SERVER_URL}")
     print(f"home     : {HOME} {'✓' if HOME.is_dir() else '✗'}")
-    token, source = resolve_token()
-    print(f"auth     : {'✓ ' + source if token else '✗ tokenなし'}")
-    if alive:
-        try:
-            messages = fetch_messages(limit=100)
-            agents = recent_agents(messages)
-            if agents:
-                print("recent   : " + ", ".join(agents))
-            print(f"messages : API OK ({len(messages)} fetched)")
-        except KaigiError as exc:
-            print(f"messages : {RED}API ERROR{RESET} ({exc})")
-            return 1
-    return 0 if alive else 1
+    token, source = resolve_token(); print(f"auth     : {'✓ ' + source if token else '✗ tokenなし'}")
+    if not alive:
+        return 1
+    try:
+        status = fetch_status(); agents = online_agents(status)
+        if agents:
+            print("online   : " + ", ".join(agents))
+        messages = fetch_messages(limit=20); print(f"messages : API OK ({len(messages)} fetched)")
+    except KaigiError as exc:
+        print(f"messages : {RED}API ERROR{RESET} ({exc})"); return 1
+    return 0
+
+
+def cmd_agents(_args: argparse.Namespace) -> int:
+    ensure_server(); status = fetch_status()
+    if not status:
+        print("agent情報なし"); return 0
+    for name in sorted(status):
+        info = status[name] if isinstance(status[name], dict) else {}
+        mark = "●" if info.get("available") else "○"
+        role = info.get("role") or "-"
+        label = info.get("label") or ""
+        print(f"{mark} {name:<16} role={role}" + (f"  {label}" if label else ""))
+    return 0
 
 
 def cmd_log(args: argparse.Namespace) -> int:
-    ensure_server()
-    messages = fetch_messages(limit=args.count)
-    print_messages(messages[-args.count :], channel=args.channel)
-    return 0
+    ensure_server(); messages = fetch_messages(limit=args.count)
+    print_messages(messages[-args.count:], channel=args.channel); return 0
 
 
 def cmd_say(args: argparse.Namespace) -> int:
-    ensure_server()
-    text = " ".join(args.text).strip()
+    ensure_server(); text = " ".join(args.text).strip()
     if not text:
         raise KaigiError("送信する本文が空です。")
-    send_message(text, args.channel)
-    print(f"{GREEN}✓{RESET} 送信  {DIM}#{args.channel}{RESET}")
-    return 0
+    send_message(text, args.channel); print(f"{GREEN}✓{RESET} 送信  {DIM}#{args.channel}{RESET}"); return 0
 
 
 def cmd_watch(args: argparse.Namespace) -> int:
-    ensure_server()
-    if args.from_start:
-        last: Any = -1
-    else:
-        initial = fetch_messages(limit=args.tail)
-        print_messages(initial[-args.tail :], channel=args.channel)
-        last = latest_id(initial, -1)
+    ensure_server(); initial = [] if args.from_start else fetch_messages(limit=args.tail)
+    print_messages(initial[-args.tail:], channel=args.channel)
+    last = -1 if args.from_start else latest_id(initial, -1)
     print(f"{DIM}── live / Ctrl-Cで終了 ──{RESET}")
     try:
         while True:
             messages = fetch_messages(since_id=last)
             if messages:
-                print_messages(messages, channel=args.channel)
-                last = latest_id(messages, last)
+                print_messages(messages, channel=args.channel); last = latest_id(messages, last)
             time.sleep(args.interval)
     except KeyboardInterrupt:
-        print()
-        return 0
+        print(); return 0
 
 
 def cmd_room(args: argparse.Namespace) -> int:
-    ensure_server()
-    initial = fetch_messages(limit=args.tail)
+    ensure_server(); initial = fetch_messages(limit=args.tail)
     print(f"{BOLD}kaigi{RESET}  {DIM}{SERVER_URL}  #{args.channel}{RESET}")
-    print_messages(initial[-args.tail :], channel=args.channel)
-    print(f"{DIM}── 入力してEnterで送信 / /help / /quit ──{RESET}")
-    last_box = [latest_id(initial, -1)]
-    stop = threading.Event()
-    out_lock = threading.Lock()
+    print_messages(initial[-args.tail:], channel=args.channel)
+    print(f"{DIM}── 入力Enter=送信 / /convene 議題 / /agents / /help / /quit ──{RESET}")
+    last_box = [latest_id(initial, -1)]; stop = threading.Event(); out_lock = threading.Lock()
 
     def watcher() -> None:
         while not stop.wait(args.interval):
@@ -443,11 +375,9 @@ def cmd_room(args: argparse.Namespace) -> int:
             visible = [m for m in messages if str(m.get("channel") or DEFAULT_CHANNEL) == args.channel]
             if visible:
                 with out_lock:
-                    print()
-                    print_messages(visible, channel=args.channel)
+                    print(); print_messages(visible, channel=args.channel)
 
-    thread = threading.Thread(target=watcher, daemon=True)
-    thread.start()
+    thread = threading.Thread(target=watcher, daemon=True); thread.start()
     try:
         while True:
             try:
@@ -459,22 +389,23 @@ def cmd_room(args: argparse.Namespace) -> int:
             if line in {"/q", "/quit", "/exit"}:
                 break
             if line == "/help":
-                print("/quit  終了 | /status  状態 | /log [N]  履歴 | /to NAME TEXT  @NAMEへ送信")
-                continue
+                print("/quit | /status | /agents | /log [N] | /to NAME TEXT | /convene TOPIC"); continue
             if line == "/status":
-                cmd_status(args)
-                continue
+                cmd_status(args); continue
+            if line == "/agents":
+                cmd_agents(args); continue
             if line.startswith("/log"):
-                parts = line.split()
-                n = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 20
-                print_messages(fetch_messages(limit=n)[-n:], channel=args.channel)
-                continue
+                parts = line.split(); n = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 20
+                print_messages(fetch_messages(limit=n)[-n:], channel=args.channel); continue
             if line.startswith("/to "):
                 parts = line.split(maxsplit=2)
                 if len(parts) < 3:
-                    print("使い方: /to claude これ見て")
-                    continue
+                    print("使い方: /to claude これ見て"); continue
                 line = f"@{parts[1].lstrip('@')} {parts[2]}"
+            if line.startswith("/convene "):
+                ns = argparse.Namespace(topic=[line[len('/convene '):]], template="planning", agents=None, cast=[],
+                                        channel=args.channel, no_follow=True, timeout=180, fallback=True)
+                cmd_convene(ns); continue
             try:
                 send_message(line, args.channel)
             except KaigiError as exc:
@@ -482,156 +413,244 @@ def cmd_room(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         print()
     finally:
-        stop.set()
-        thread.join(timeout=1.5)
+        stop.set(); thread.join(timeout=1.5)
     return 0
+
+
+def parse_cast(items: list[str]) -> dict[str, str]:
+    cast: dict[str, str] = {}
+    for item in items:
+        if "=" not in item:
+            raise KaigiError(f"--cast は role=agent 形式: {item}")
+        role, agent = item.split("=", 1); role, agent = role.strip(), agent.strip().lstrip("@")
+        if not role or not agent:
+            raise KaigiError(f"--cast は role=agent 形式: {item}")
+        cast[role] = agent
+    return cast
+
+
+def choose_cast(template: dict[str, Any], agents_arg: str | None, cast_items: list[str]) -> dict[str, str]:
+    explicit = parse_cast(cast_items)
+    if explicit:
+        return explicit
+    if not agents_arg:
+        return {}
+    requested = [x.strip().lstrip("@") for x in agents_arg.split(",") if x.strip()]
+    roles = [str(r) for r in template.get("roles", [])]
+    if not requested or not roles:
+        return {}
+    return {role: requested[i % len(requested)] for i, role in enumerate(roles)}
+
+
+def fallback_convene(topic: str, channel: str, agents_arg: str | None) -> None:
+    if agents_arg:
+        names = [x.strip().lstrip("@") for x in agents_arg.split(",") if x.strip()]
+        mention = " ".join(f"@{x}" for x in names)
+    else:
+        mention = "@all"
+    prompt = (f"{mention} 会議招集。議題: {topic}\n"
+              "各自まず独立に分析し、他者の案に引っ張られず結論・根拠・リスクを出す。"
+              "その後、相互批判して矛盾を潰し、最後に最も妥当な統合案を1つにまとめる。")
+    send_message(prompt, channel)
+
+
+def follow_session(session_id: int, channel: str, timeout: int, interval: float = 1.0) -> int:
+    initial = fetch_messages(limit=8); last = latest_id(initial, -1); print_messages(initial, channel=channel)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(interval)
+        msgs = fetch_messages(since_id=last)
+        if msgs:
+            print_messages(msgs, channel=channel); last = latest_id(msgs, last)
+        active = request_json("GET", "/api/sessions/active", params={"channel": channel})
+        if not active or (isinstance(active, dict) and active.get("id") != session_id):
+            return 0
+    print(f"{YELLOW}!{RESET} follow timeout。会議は継続している可能性があります。")
+    return 0
+
+
+def cmd_convene(args: argparse.Namespace) -> int:
+    ensure_server(); topic = " ".join(args.topic).strip()
+    if not topic:
+        raise KaigiError("議題が空です。")
+    aliases = {"plan": "planning", "review": "code-review", "code": "code-review", "design": "design-critique"}
+    template_id = aliases.get(args.template, args.template)
+    try:
+        templates = fetch_templates(); template = next((x for x in templates if x.get("id") == template_id), None)
+        if not template:
+            raise KaigiError(f"session template がありません: {template_id}")
+        cast = choose_cast(template, args.agents, args.cast)
+        payload: dict[str, Any] = {"template_id": template_id, "channel": args.channel, "goal": topic, "started_by": "user"}
+        if cast:
+            payload["cast"] = cast
+        session = request_json("POST", "/api/sessions/start", payload=payload)
+        if not isinstance(session, dict) or not session.get("id"):
+            raise KaigiError("session start response が不正です")
+        print(f"{GREEN}✓{RESET} 会議開始  session={session['id']}  template={template_id}")
+        if session.get("cast"):
+            print("cast     : " + ", ".join(f"{r}={a}" for r, a in session["cast"].items()))
+        print(f"goal     : {topic}")
+        if args.no_follow or not sys.stdout.isatty():
+            return 0
+        return follow_session(int(session["id"]), args.channel, args.timeout)
+    except KaigiError as exc:
+        if not args.fallback:
+            raise
+        eprint(f"{YELLOW}! native session unavailable:{RESET} {exc}")
+        fallback_convene(topic, args.channel, args.agents)
+        print(f"{GREEN}✓{RESET} @mention会議として招集しました")
+        return 0
+
+
+def cmd_templates(_args: argparse.Namespace) -> int:
+    ensure_server()
+    for t in fetch_templates():
+        print(f"{t.get('id', '?'):<18} {t.get('name', '')}  {t.get('description', '')}")
+    return 0
+
+
+def chatgpt_block(name: str, model: str, base_url: str) -> str:
+    return ("# BEGIN KAIGI CHATGPT\n"
+            f"[agents.{name}]\n"
+            "type = \"api\"\n"
+            f"base_url = {json.dumps(base_url)}\n"
+            f"model = {json.dumps(model)}\n"
+            "color = \"#10a37f\"\n"
+            "label = \"ChatGPT\"\n"
+            "api_key_env = \"OPENAI_API_KEY\"\n"
+            "context_messages = 30\n"
+            "system_prompt = \"You are ChatGPT participating in a multi-agent technical meeting. Give independent analysis, challenge weak assumptions, and converge on a concrete recommendation.\"\n"
+            "# END KAIGI CHATGPT\n")
+
+
+def install_chatgpt_config(name: str, model: str, base_url: str) -> pathlib.Path:
+    HOME.mkdir(parents=True, exist_ok=True); path = HOME / "config.local.toml"
+    current = path.read_text(encoding="utf-8") if path.exists() else ""
+    start, end = "# BEGIN KAIGI CHATGPT", "# END KAIGI CHATGPT"
+    if start in current and end in current:
+        before = current.split(start, 1)[0].rstrip(); after = current.split(end, 1)[1].lstrip("\n")
+        current = (before + "\n\n" if before else "") + chatgpt_block(name, model, base_url) + ("\n" + after if after else "")
+    else:
+        current = current.rstrip() + ("\n\n" if current.strip() else "") + chatgpt_block(name, model, base_url)
+    path.write_text(current, encoding="utf-8"); return path
+
+
+def cmd_chatgpt(args: argparse.Namespace) -> int:
+    if args.chat_command == "setup":
+        path = install_chatgpt_config(args.name, args.model, args.base_url)
+        print(f"{GREEN}✓{RESET} ChatGPT agent設定を追加: {path}")
+        if os.environ.get("OPENAI_API_KEY"):
+            print(f"{GREEN}✓{RESET} OPENAI_API_KEY 検出")
+        else:
+            print(f"{YELLOW}!{RESET} OPENAI_API_KEY は未設定。APIキーを環境変数へ設定してから起動してください。")
+        print("次: kaigi restart --no-wrapper && kaigi chatgpt start")
+        return 0
+    if args.chat_command == "start":
+        ensure_server(); LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with LOG_FILE.open("a", encoding="utf-8") as h:
+            pid = launch_wrapper(args.name, h)
+        if pid:
+            print(f"{GREEN}✓{RESET} ChatGPT wrapper 起動 pid={pid}")
+        elif wrapper_running(args.name):
+            print(f"{GREEN}✓{RESET} ChatGPT wrapper は既に起動中")
+        else:
+            raise KaigiError("ChatGPT wrapperを起動できません。config.local.toml / wrapper_api.py / venvを確認してください。")
+        return 0
+    if args.chat_command == "status":
+        ensure_server(); status = fetch_status(); info = status.get(args.name, {}) if isinstance(status, dict) else {}
+        online = bool(isinstance(info, dict) and info.get("available"))
+        print(f"chatgpt  : {'ONLINE' if online else 'OFFLINE'} ({args.name})")
+        print(f"api key  : {'set' if os.environ.get('OPENAI_API_KEY') else 'not set'}")
+        print(f"model    : {args.model}")
+        return 0 if online else 1
+    raise KaigiError("chatgpt subcommand が必要です: setup/start/status")
 
 
 def cmd_start(args: argparse.Namespace) -> int:
-    wrapper = "" if args.no_wrapper else args.wrapper
-    start_server(wrapper=wrapper, quiet=False)
-    return 0
+    start_server(wrapper="" if args.no_wrapper else args.wrapper, quiet=False); return 0
 
 
 def cmd_stop(_args: argparse.Namespace) -> int:
     if stop_server():
-        print(f"{GREEN}✓{RESET} kaigi が起動したプロセスを停止しました")
-        return 0
+        print(f"{GREEN}✓{RESET} kaigi管理プロセスを停止しました"); return 0
     if server_alive():
-        print(f"{YELLOW}!{RESET} サーバーは動いていますが kaigi 管理PIDではありません。停止していません。")
-        return 1
-    print("agentchattr は停止中です。")
-    return 0
+        print(f"{YELLOW}!{RESET} サーバーは動作中ですがkaigi管理PIDではないため停止していません。"); return 1
+    print("agentchattr は停止中です。"); return 0
 
 
 def cmd_restart(args: argparse.Namespace) -> int:
-    stop_server()
-    time.sleep(0.4)
-    start_server(wrapper="" if args.no_wrapper else args.wrapper, quiet=False)
-    return 0
+    stop_server(); time.sleep(0.3); start_server(wrapper="" if args.no_wrapper else args.wrapper, quiet=False); return 0
 
 
 def cmd_doctor(_args: argparse.Namespace) -> int:
-    checks: list[tuple[str, bool, str]] = []
-    checks.append(("agentchattr home", HOME.is_dir(), str(HOME)))
-    checks.append(("run.py", (HOME / "run.py").is_file(), str(HOME / "run.py")))
-    py = python_bin()
-    checks.append(("python venv", py is not None, str(py or "not found")))
-    checks.append(("wrapper_api.py", (HOME / "wrapper_api.py").is_file(), str(HOME / "wrapper_api.py")))
-    token, source = resolve_token()
-    checks.append(("auth token", token is not None, source))
-    alive = server_alive()
-    checks.append(("server", alive, SERVER_URL))
-    api_ok = False
-    api_detail = "server down"
-    if alive:
-        try:
-            fetch_messages(limit=1)
-            api_ok = True
-            api_detail = "/api/messages OK"
-        except Exception as exc:
-            api_detail = str(exc)
-    checks.append(("messages API", api_ok, api_detail))
+    checks = [("agentchattr home", HOME.is_dir(), str(HOME)), ("run.py", (HOME / "run.py").is_file(), str(HOME / "run.py")),
+              ("python venv", python_bin() is not None, str(python_bin() or "not found")),
+              ("wrapper_api.py", (HOME / "wrapper_api.py").is_file(), str(HOME / "wrapper_api.py")),
+              ("auth token", resolve_token()[0] is not None, resolve_token()[1]), ("server", server_alive(), SERVER_URL)]
+    if server_alive():
+        for name, path in (("messages API", "/api/messages"), ("status API", "/api/status"), ("sessions API", "/api/sessions/templates")):
+            try:
+                request_json("GET", path, params={"limit": 1} if path == "/api/messages" else None); checks.append((name, True, path + " OK"))
+            except Exception as exc:
+                checks.append((name, False, str(exc)))
     print(f"kaigi {VERSION}\n")
     for name, ok, detail in checks:
-        mark = f"{GREEN}✓{RESET}" if ok else f"{RED}✗{RESET}"
-        print(f"{mark} {name:<16} {detail}")
-    core = [checks[0], checks[1], checks[2], checks[5], checks[6]]
-    return 0 if all(ok for _, ok, _ in core) else 1
+        print(f"{GREEN + '✓' + RESET if ok else RED + '✗' + RESET} {name:<16} {detail}")
+    return 0 if all(x[1] for x in checks if x[0] in {"agentchattr home", "run.py", "python venv", "server", "messages API"}) else 1
 
 
 def cmd_open(_args: argparse.Namespace) -> int:
     ensure_server()
-    candidates = [
-        (["wslview", SERVER_URL], "wslview"),
-        (["xdg-open", SERVER_URL], "xdg-open"),
-        (["open", SERVER_URL], "open"),
-        (["cmd.exe", "/c", "start", "", SERVER_URL], "cmd.exe"),
-    ]
-    for cmd, binary in candidates:
+    for cmd, binary in [(["wslview", SERVER_URL], "wslview"), (["xdg-open", SERVER_URL], "xdg-open"),
+                        (["open", SERVER_URL], "open"), (["cmd.exe", "/c", "start", "", SERVER_URL], "cmd.exe")]:
         if shutil.which(binary):
             subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            print(f"{GREEN}✓{RESET} ブラウザで開きました: {SERVER_URL}")
-            return 0
-    print(SERVER_URL)
-    return 0
+            print(f"{GREEN}✓{RESET} ブラウザで開きました: {SERVER_URL}"); return 0
+    print(SERVER_URL); return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="kaigi", description="agentchattr会議をターミナルから最短操作")
-    p.add_argument("--version", action="version", version=f"kaigi {VERSION}")
-    sub = p.add_subparsers(dest="command")
-
-    room = sub.add_parser("room", aliases=["join"], help="会議室に入る（既定）")
-    room.add_argument("--tail", type=int, default=20)
-    room.add_argument("--channel", "-c", default=DEFAULT_CHANNEL)
-    room.add_argument("--interval", type=float, default=DEFAULT_INTERVAL)
-    room.set_defaults(func=cmd_room)
-
-    log = sub.add_parser("log", aliases=["l"], help="履歴を見る")
-    log.add_argument("count", type=int, nargs="?", default=20)
-    log.add_argument("--channel", "-c", default=None)
-    log.set_defaults(func=cmd_log)
-
-    watch = sub.add_parser("watch", aliases=["w"], help="新着をライブ表示")
-    watch.add_argument("--tail", type=int, default=10)
-    watch.add_argument("--channel", "-c", default=None)
-    watch.add_argument("--interval", type=float, default=DEFAULT_INTERVAL)
-    watch.add_argument("--from-start", action="store_true")
-    watch.set_defaults(func=cmd_watch)
-
-    say = sub.add_parser("say", aliases=["s"], help="発言する")
-    say.add_argument("text", nargs="+")
-    say.add_argument("--channel", "-c", default=DEFAULT_CHANNEL)
-    say.set_defaults(func=cmd_say)
-
-    status = sub.add_parser("status", aliases=["st", "who"], help="状態を見る")
-    status.set_defaults(func=cmd_status)
-
-    start = sub.add_parser("start", help="サーバーを起動")
-    start.add_argument("--wrapper", default=DEFAULT_WRAPPER)
-    start.add_argument("--no-wrapper", action="store_true")
-    start.set_defaults(func=cmd_start)
-
-    stop = sub.add_parser("stop", help="kaigiが起動したサーバーを停止")
-    stop.set_defaults(func=cmd_stop)
-
-    restart = sub.add_parser("restart", aliases=["r"], help="再起動")
-    restart.add_argument("--wrapper", default=DEFAULT_WRAPPER)
-    restart.add_argument("--no-wrapper", action="store_true")
-    restart.set_defaults(func=cmd_restart)
-
-    doctor = sub.add_parser("doctor", aliases=["d"], help="環境診断")
-    doctor.set_defaults(func=cmd_doctor)
-
-    op = sub.add_parser("open", help="Web UIを開く")
-    op.set_defaults(func=cmd_open)
-
-    help_p = sub.add_parser("help", help="ヘルプ")
-    help_p.set_defaults(func=lambda _a: (p.print_help() or 0))
+    p = argparse.ArgumentParser(prog="kaigi", description="agentchattr会議を最短操作 + 会議自動招集")
+    p.add_argument("--version", action="version", version=f"kaigi {VERSION}"); sub = p.add_subparsers(dest="command")
+    room = sub.add_parser("room", aliases=["join"], help="会議室に入る（既定）"); room.add_argument("--tail", type=int, default=20); room.add_argument("--channel", "-c", default=DEFAULT_CHANNEL); room.add_argument("--interval", type=float, default=DEFAULT_INTERVAL); room.set_defaults(func=cmd_room)
+    log = sub.add_parser("log", aliases=["l"], help="履歴"); log.add_argument("count", type=int, nargs="?", default=20); log.add_argument("--channel", "-c", default=None); log.set_defaults(func=cmd_log)
+    watch = sub.add_parser("watch", aliases=["w"], help="ライブ監視"); watch.add_argument("--tail", type=int, default=10); watch.add_argument("--channel", "-c", default=None); watch.add_argument("--interval", type=float, default=DEFAULT_INTERVAL); watch.add_argument("--from-start", action="store_true"); watch.set_defaults(func=cmd_watch)
+    say = sub.add_parser("say", aliases=["s"], help="発言"); say.add_argument("text", nargs="+"); say.add_argument("--channel", "-c", default=DEFAULT_CHANNEL); say.set_defaults(func=cmd_say)
+    status = sub.add_parser("status", aliases=["st", "who"], help="状態"); status.set_defaults(func=cmd_status)
+    agents = sub.add_parser("agents", aliases=["a"], help="参加エージェント"); agents.set_defaults(func=cmd_agents)
+    conv = sub.add_parser("convene", aliases=["meet", "c"], help="AI会議を1コマンド招集"); conv.add_argument("topic", nargs="+"); conv.add_argument("--template", "-t", default="planning", help="planning/debate/code-review/design-critique"); conv.add_argument("--agents", help="claude,codex,chatgpt のように指定"); conv.add_argument("--cast", action="append", default=[], help="role=agent（複数可）"); conv.add_argument("--channel", "-c", default=DEFAULT_CHANNEL); conv.add_argument("--no-follow", action="store_true"); conv.add_argument("--timeout", type=int, default=180); conv.add_argument("--no-fallback", dest="fallback", action="store_false", default=True); conv.set_defaults(func=cmd_convene)
+    templates = sub.add_parser("templates", aliases=["tpl"], help="会議テンプレ一覧"); templates.set_defaults(func=cmd_templates)
+    chat = sub.add_parser("chatgpt", aliases=["chat"], help="ChatGPTを会議参加者として設定/起動"); csub = chat.add_subparsers(dest="chat_command")
+    for action in ("setup", "start", "status"):
+        cp = csub.add_parser(action); cp.add_argument("--name", default="chatgpt"); cp.add_argument("--model", default=DEFAULT_CHATGPT_MODEL)
+        if action == "setup":
+            cp.add_argument("--base-url", default="https://api.openai.com/v1")
+        cp.set_defaults(func=cmd_chatgpt)
+    start = sub.add_parser("start", help="サーバー起動"); start.add_argument("--wrapper", default=DEFAULT_WRAPPER); start.add_argument("--no-wrapper", action="store_true"); start.set_defaults(func=cmd_start)
+    stop = sub.add_parser("stop", help="kaigi管理サーバー停止"); stop.set_defaults(func=cmd_stop)
+    restart = sub.add_parser("restart", aliases=["r"], help="再起動"); restart.add_argument("--wrapper", default=DEFAULT_WRAPPER); restart.add_argument("--no-wrapper", action="store_true"); restart.set_defaults(func=cmd_restart)
+    doctor = sub.add_parser("doctor", aliases=["d"], help="環境診断"); doctor.set_defaults(func=cmd_doctor)
+    op = sub.add_parser("open", help="Web UI"); op.set_defaults(func=cmd_open)
+    help_p = sub.add_parser("help", help="ヘルプ"); help_p.set_defaults(func=lambda _a: (p.print_help() or 0))
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    known = {"room", "join", "log", "l", "watch", "w", "say", "s", "status", "st", "who", "start", "stop", "restart", "r", "doctor", "d", "open", "help"}
+    known = {"room", "join", "log", "l", "watch", "w", "say", "s", "status", "st", "who", "agents", "a", "convene", "meet", "c", "templates", "tpl", "chatgpt", "chat", "start", "stop", "restart", "r", "doctor", "d", "open", "help"}
     if not argv:
         argv = ["room"]
     elif argv[0] not in known and not argv[0].startswith("-"):
         argv = ["say", *argv]
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    parser = build_parser(); args = parser.parse_args(argv)
     if not hasattr(args, "func"):
-        parser.print_help()
-        return 1
+        parser.print_help(); return 1
     try:
         return int(args.func(args) or 0)
     except KaigiError as exc:
-        eprint(f"{RED}エラー:{RESET} {exc}")
-        return 1
+        eprint(f"{RED}エラー:{RESET} {exc}"); return 1
     except KeyboardInterrupt:
-        print()
-        return 130
+        print(); return 130
 
 
 if __name__ == "__main__":
