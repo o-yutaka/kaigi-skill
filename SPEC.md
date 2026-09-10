@@ -1,168 +1,146 @@
-# kaigi v6 specification
+# kaigi v7 specification
 
 ## Goal
 
-agentchattrを `safe agent selection → agent wake/launch → parallel independent analysis → dissent → synthesis → durable run → recovery → proof packet → advisory handoff` まで一貫して扱う。upstream routing / Sessions / `wrapper.py` / `wrapper_api.py` を尊重し、同機能を再実装しない。
+agentchattrを `safe selection → wake/launch → Council → durable run → recovery → evidence proof → advisory handoff → TO DO queue` まで扱う。upstream routing/Sessions/`wrapper.py`/`wrapper_api.py`/Jobs RESTを再実装せず利用し、Evidence / Decision / Authority / Executionの境界を維持する。
 
-## Public UX
+## UX
 
-- `kaigi "TOPIC"` — v6 safe-auto Council。complete後proof packetを自動生成。
-- `kaigi @agent TEXT` — direct say shortcut。bare meeting UXへ変更してもこの互換を維持。
-- `kaigi say TEXT` — 明示単発送信。
-- `kaigi decide TOPIC` — safe-autoの明示形。制御option用。
-- `kaigi convene TOPIC` — lower-level Council/native Sessions入口。
-- `kaigi launch A B` — CLI agentをupstream通常wrapperで起動。
-- `kaigi go TOPIC --agents A,B` — 明示agent準備→Council。
-- `kaigi reconcile/resume/recover` — 未完了Council回復。
-- `kaigi packet/verify/handoff/audit` — proof surface。
+- `kaigi "TOPIC"`: safe-auto Council + proof。
+- `kaigi @agent TEXT`: direct message互換。
+- `kaigi decide TOPIC`: safe-auto明示形。
+- `kaigi reconcile/resume/recover`: incomplete Council回復。
+- `kaigi packet/verify/handoff/audit`: proof surface。
+- `kaigi queue [RUN]`: verified Decisionをupstream Jobs TO DOへ登録。
+- `kaigi jobs`: upstream Jobs read surface。
 
-## Safe-auto selection contract
+## Safe-auto / Council
 
-候補は`load_agents_config()`と`/api/status`のunionから作る。
+v6 contractを継承。local API/設定済みCLIを既定候補、cloud APIと分類不能online participantは既定除外。FINAL reply実観測のみcomplete。各Council outboundは`RUN=<run_id>`を保持。
 
-既定policy:
+## Invocation binding
 
-- `type="api"`かつloopback host (`127.0.0.1`, `localhost`, `::1`, `0.0.0.0`) = local API。暗黙候補、自動wake可。
-- `type="api"`かつ非loopback = cloud API。暗黙候補から除外。
-- `command`を持つ非API agent = CLI。暗黙候補、offlineなら通常`wrapper.py`起動可。
-- configで分類不能なonline participant = 既定除外。
-- `user`, `system`, `telegram-bot` = 除外。
-- `--allow-cloud`時だけcloud APIをsafe-auto候補へ入れてよい。
-- `--allow-unknown`時だけ分類不能online participantを候補へ入れてよい。
-- `--agents`明示指定は対象agentについて明示同意とみなしcloud API準備も可。ただしonline実観測できない対象があれば開始拒否。
-- default `max_agents=4`, `min_agents=2`。環境変数`KAIGI_AUTO_MAX_AGENTS`, `KAIGI_AUTO_MIN_AGENTS`で既定変更可。
-- `--dry-run`はlaunch/wake/send/run creationを行わない。
+v6ではCouncil完了後のpacket生成が`latest.json`参照に依存する狭いraceを持ち得た。v7のsafe-auto wrapperは、同一process内で`core.new_run()`が返したrun IDをそのinvocationのidentityとして捕捉する。
 
-## Council contract
+v6内部が`load_run(None)`を行う場合、そのinvocation中だけ捕捉run IDへ解決する。処理終了後にmonkey-patchは必ずrestoreする。これにより他process/別runによるlatest更新をproof identityへ採用しない。
 
-ROUND1=independent fan-out、ROUND2=dissent/review fan-out、FINAL=synthesis。FINAL replyを実観測した場合だけcomplete。
+## Decision packet additive provenance
 
-各outbound Council markerは`RUN=<run_id>`を含む。run ledgerはparticipants, roles, synth, outbound message IDs, round replies, final replyを可能な限り保持する。
+既存schema `kaigi.decision_packet.v1`を後方互換のままadditive拡張する。
 
-## Run persistence / recovery
+### Structured decision
 
-`KAIGI_STATE_DIR` default `~/.local/state/kaigi`。
+`decision.text`はraw FINALを保持し、`decision.sections`へ以下のheadingをmachine-readable抽出する。
 
-- `runs/<run_id>.json`
-- `latest.json`
-- atomic write
-- `reconcile`はchat read-only。outbound zero。
-- `resume`はreconcile相当を先行し、存在するROUND2/FINAL markerを再送しない。
-- `recover`はreconcile→resumeをまとめ、complete時にpacket未生成なら生成する。
+- decision
+- why
+- dissent
+- risks
+- next_actions
 
-Council以外のrunはresume/reconcile/recover対象外。対応したと誤報しない。
+headingが存在しないsectionは捏造しない。
 
-## Decision packet contract
+### Runtime provenance
 
-Path: `packets/<run_id>.json`
-Schema: `kaigi.decision_packet.v1`
+`provenance`:
 
-complete Councilのみ生成可能。packetは少なくとも:
+- `kaigi_version = 7.0.0`
+- runtime files: `kaigi`, `kaigi_core.py`, `kaigi_ops.py`, `kaigi_v6.py`, `kaigi_v7.py`
+- 各fileのSHA-256とbyte size
+- `runtime_sha256 = SHA256(canonical({kaigi_version, files}))`
 
-- run: run_id, kind, topic, channel, server, state, started/completed times, participants, roles, synth
-- decision: final sender, final message id, final text
-- round1 / round2 records
-- kickoff / round2 prompt / final prompt / final reply IDs
-- evidence_ids
-- normalized transcript (`id`, `sender`, `text`, `channel`)
-- `transcript_sha256`
-- `packet_sha256`
-- authority classification
+packet全体を再hashし、run ledger `decision_packet` pointerも新packet hash/runtime hashへ更新する。
 
-を持つ。
+`kaigi verify --current-runtime`はpacket provenanceの内部hash検証に加え、現在runtimeを再fingerprintしてpacket作成時と同一か要求する。旧packetにprovenanceが無い場合、通常verifyは互換維持するが`--current-runtime`はfailする。
 
-### Canonical hash
+## Upstream Jobs facts / mapping
 
-hash inputはUTF-8 JSON、`ensure_ascii=false`, `sort_keys=true`, separators `(',', ':')`。SHA-256。
+upstream `JobStore` status:
 
-`transcript_sha256 = SHA256(canonical(transcript))`。
-`packet_sha256 = SHA256(canonical(packet_without_packet_sha256))`。
+- `open` = UI `TO DO`
+- `done` = UI `ACTIVE`
+- `archived` = UI `CLOSED`
 
-`generated_at`はpacket hash対象。run ledgerへpacket pointer/hashを書き戻す処理はpacket hash生成後でよい。
+upstream `POST /api/jobs`は`jobs.create(...)`を呼び、現行Store default statusは`done`。create API bodyはtitle/type/channel/created_by/anchor_msg_id/assignee/bodyを使用し、statusをcreateへ渡さない。
 
-### Evidence selection
+`PATCH /api/jobs/{job_id}`はstatus/title/assignee更新を受け、statusは`open|done|archived`。
 
-transcriptは任意の会話全体ではなく、run ledgerに束縛されたevidence message IDsのみをmessage ID昇順で取得する。
+`DELETE /api/jobs/{job_id}?permanent=true`はpermanent delete経路。
 
-IDs:
+JobStore create/update callbackはbroadcastへ接続される。agent routingはJob thread message側で発生するため、kaigi queueはJob thread messageを自動投稿しない。
 
-- kickoff message
-- recorded ROUND1 replies
-- ROUND2 prompt
-- recorded ROUND2 replies
-- FINAL prompt
-- FINAL reply
+## Queue contract
 
-要求IDがagentchattrから取得できない場合、proof packet生成を成功扱いしない。
+`kaigi queue [RUN_ID]`:
 
-## Verify contract
+1. complete run/packetを解決。packetが無ければ生成可。
+2. v7 packet verificationを行う。既定は`live=true`でexact evidence IDsを再取得してtranscript hashまで確認。`--no-live`で明示省略可。
+3. `GET /api/jobs`で同一markerを検索。
+4. `KAIGI-RUN:<run_id>` + `KAIGI-PACKET:<packet_sha256>`一致Jobがあればidempotent returnし、重複POSTしない。
+5. 未存在なら`POST /api/jobs`。title/type/job channel/created_by=kaigi/final message anchor/optional assignee/bodyを送る。
+6. POST成功直後に必ず`PATCH status=open`。
+7. PATCHが例外またはresponse status != openなら、今作ったJobを`DELETE ?permanent=true`でcompensating rollbackする。誤ACTIVEを成功として残さない。
+8. open確認後のみrun ledgerへ`job_bridge` pointerを保存し成功表示。
 
-`kaigi verify RUN` local mode:
+### Queue body
 
-1. schema確認
-2. packet_sha256再計算
-3. transcript_sha256再計算
-4. run ledger final_textとの一致
-5. ledger packet pointerが存在する場合はpacket hash一致
+upstream bodyはStoreで1000 charsにtruncateされるため、identity/authority markerを先頭へ置く。
 
-`--live`では上記が通った後、packetのevidence_idsをagentchattrから同channelで再取得し、normalized live transcript hashがpacketの`transcript_sha256`と一致することを確認する。
+```text
+KAIGI-RUN:<run_id>
+KAIGI-PACKET:<packet_sha256>
+AUTHORITY: advisory; execution_authorized=false; requires_separate_authority=true
 
-どれか不一致ならexit non-zero。改ざん/欠落を推測補完しない。
+DECISION:
+<raw final text, remaining budget内>
+```
 
-## Handoff contract
+markerがtruncateされないようdecision text側を先に縮める。
 
-Path: `handoffs/<run_id>.json`
-Schema: `kaigi.handoff.v1`
+### Dry-run
 
-Decision packetをlocal verifyしてから生成し、source run ID / packet SHA / transcript SHA / topic / participants / synth / decisionを含む。
+`kaigi queue --dry-run`はJobs API writeを行わない。既存packetを要求し、local verify後にtitle/assignee/status/authority予定だけ表示する。
 
-authorityは固定:
+## Jobs read surface
 
-- `classification="advisory"`
-- `execution_authorized=false`
-- `requires_separate_authority=true`
+`kaigi jobs [--channel X] [--status open|done|archived]`は`GET /api/jobs`のみ。id/status/assignee/source/titleを表示し、bodyにKAIGI-RUN markerがあればsource=kaigiと表示する。
 
-handoff自体もcanonical JSONの`handoff_sha256`を持つ。会議/Decision/EvidenceをAuthority/Executionへ自動昇格しない。
+## Authority contract
 
-## Agent launch contract
+Queueはwork record生成でありExecutionではない。
 
-CLI agentはupstream `wrapper.py AGENT`。skip-permissions/bypass/yolo launcherを自動利用しない。terminal priorityはv5を維持。API agentはupstream `wrapper_api.py`。
-
-## Cloud governance
-
-cloud API agentを暗黙wake/参加させない。明示`--allow-cloud`、明示`--agents`、`kaigi wake NAME`、`kaigi api start NAME`のようなユーザー指定時だけ対象にできる。API secret値はrepository/configへ保存せず、環境変数名だけ保持する。
-
-## Compatibility
-
-v5の`launch`, `go`, `reconcile`, `resume`、v4 core surface、native Sessions、interactive roomを保持する。破壊的変更はbare non-command textの意味のみで、v6ではsay shortcutからsafe-auto meeting topicへ変更する。direct `@NAME` shortcutは維持する。
+- Decision packet: advisory-decision / execution_authorized=false
+- handoff: advisory / execution_authorized=false / requires_separate_authority=true
+- queue body: same authority marker
+- queueはJob threadへagent mention/messageを送らない
+- agent dispatch/activationはv7では自動化しない
 
 ## Verification gate
 
-GitHub CI最低条件:
-
 ```bash
-python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py
+python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py kaigi_v7.py
 python -m unittest discover -v tests -p 'test_*.py'
 bash -n install.sh
 HOME="$RUNNER_TEMP/kaigi-home" bash install.sh
 HOME="$RUNNER_TEMP/kaigi-home" bash install.sh
 ```
 
-Regression must cover:
+Regression minimum:
 
-- existing core/ops regressions
-- public version 6.0.0
-- bare topic→safe-auto Council→packet
-- cloud API excluded by default
-- `--allow-cloud` inclusion
-- `@agent` direct-message compatibility
-- dry-run outbound zero / no run creation
-- packet tamper detection
-- live source transcript tamper detection
-- handoff `execution_authorized=false`
-- audit proof PASS
+- v4/v5/v6 behavior retained
+- version 7.0.0
+- safe-auto cloud governance/direct mention/tamper/live proof
+- runtime provenance + structured decision
+- `--current-runtime` PASS for unchanged runtime
+- invocation binding resolves own run, not foreign latest
+- queue creates `open` TO DO
+- queue body run/packet/authority binding
+- queue idempotency: second call no POST
+- PATCH failure permanent rollback, no lingering job
+- queue dry-run: zero Jobs write
+- jobs list source/status
 - installer idempotency + 4 skill locations
 
 ## Install
 
-`kaigi`, `kaigi_core.py`, `kaigi_ops.py`, `kaigi_v6.py`, `SKILL.md`を同repositoryに保持する。installerは4 runtime filesの存在を確認してからCLI symlink/skill配布する。
+Repository runtime set: `kaigi`, `kaigi_core.py`, `kaigi_ops.py`, `kaigi_v6.py`, `kaigi_v7.py`, `SKILL.md`。installerはruntime file欠落時にfailし、CLI symlinkとClaude/Hermes/Codex/OpenCode skill配布を冪等実行する。

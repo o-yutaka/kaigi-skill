@@ -1,103 +1,81 @@
 ---
 name: kaigi
-description: agentchattr のマルチAI会議を操作する。安全な自動参加者選定、AI起動、独立分析/反論/統合、未完了runの再照合/再開、Decision proof packet、改ざん検証、非権限handoff、Claude/Codex/ChatGPT/ローカルAPIモデル等への問い合わせが必要な時に使う。
+description: agentchattr のマルチAI会議を操作する。安全な自動参加者選定、AI起動、独立分析/反論/統合、未完了run回復、Decision proof、runtime provenance、verified DecisionのTO DO queue、Claude/Codex/ChatGPT/ローカルAPIモデル等への問い合わせが必要な時に使う。
 ---
 # kaigi
 
-`kaigi` CLIでagentchattr会議を操作する。
+## 通常フロー
 
-## v6の通常フロー
-
-複数AIで判断したい時は、原則これだけでよい。
+複数AIで判断する時は原則:
 
 ```bash
 kaigi "議題"
 ```
 
-bare textはsafe-auto Councilとして扱う。個別agentへの単発送信は先頭を`@NAME`にするか`kaigi say`を使う。
+safe-autoで参加者を分類/準備し、Councilを完走し、実FINAL replyが観測できた場合だけcomplete + proof packetを作る。個別送信は`kaigi @NAME 本文`または`kaigi say`。
+
+## Safe-auto governance
+
+既定:
+- local API: 候補、自動wake可
+- 設定済みCLI: 候補、offlineならupstream通常`wrapper.py`で起動可
+- cloud API: 除外
+- 分類不能online agent: 除外
+- system/user/bot: 除外
+
+cloudは`--allow-cloud`または明示`--agents`時だけ。unknownは`--allow-unknown`時だけ。`--dry-run`ではlaunch/wake/send/run creationを行わない。
+
+## Council
+
+ROUND1 independent fan-out → ROUND2 dissent/review → FINAL synthesis。FINAL reply実観測のみcomplete。各outboundに`RUN=<run_id>`を持たせる。
+
+## Recovery
+
+- `kaigi reconcile [RUN]`: chat read-only再照合。outbound zero。
+- `kaigi resume [RUN]`: 既存markerを再送せず不足stageのみ続行。
+- `kaigi recover [RUN]`: reconcile→resume→completeならproof生成。
+
+## Proof / provenance
+
+- `kaigi packet [RUN]`
+- `kaigi verify [RUN] --live --current-runtime`
+- `kaigi handoff [RUN]`
+- `kaigi audit`
+
+Decision packetは実message IDs、normalized transcript、`transcript_sha256`、`packet_sha256`に加え、v7では`decision.sections`とruntime file SHA256/size + `runtime_sha256`を保持する。
+
+safe-autoはそのinvocationが作成したrun IDを直接捕捉してpacketへ束縛し、別processが`latest.json`を更新しても別runを採用しない。
+
+## Queue bridge
+
+verified Decisionをupstream agentchattr JobsへTO DOとして渡す時:
 
 ```bash
-kaigi @claude この差分だけ見て
-kaigi say "general channelへ送る"
+kaigi queue [RUN_ID]
+kaigi queue [RUN_ID] --assignee claude
+kaigi jobs --status open
 ```
 
-## Safe-auto contract
+`queue`は既定でlive transcriptまでverifyする。同一`run_id + packet_sha256`のJobが既にあれば重複作成しない。
 
-`kaigi "議題"` / `kaigi decide "議題"` は:
+upstream内部statusは`open=TO DO`, `done=ACTIVE`, `archived=CLOSED`。`POST /api/jobs`はStore defaultにより`done`になるため、kaigiは直後に`PATCH status=open`を必須実行する。PATCH失敗時は今作ったJobをpermanent deleteでrollbackし、誤ACTIVEを残さない。
 
-1. agentchattr serverを確認/起動。
-2. config + `/api/status` から候補を分類。
-3. local APIは暗黙候補、自動wake可。
-4. CLI agentは候補、offlineなら通常`wrapper.py`で起動可。
-5. cloud APIは既定で除外。`--allow-cloud`または明示`--agents`時だけ参加可能。
-6. 分類不能online agentは既定で除外。必要なら`--allow-unknown`。
-7. participantをonline実観測してからCouncil開始。
-8. complete後、Decision proof packetを生成。
-
-選定だけ確認する時は `kaigi decide "議題" --dry-run`。このモードはagent launchも会議message送信もしない。
-
-## Council contract
-
-ROUND1=独立fan-out、ROUND2=実応答者によるdissent/review、FINAL=synthesis。
-
-FINAL replyを実観測した場合だけcomplete。timeout/欠落を成功扱いしない。各Council messageに`RUN=<run_id>`を付与し、message IDと合わせて再照合可能にする。
-
-## Resume / recover
-
-- `kaigi reconcile [RUN_ID]` — chat実績からledgerを副作用なしで再照合。outbound messageを送らない。
-- `kaigi resume [RUN_ID]` — 既存markerを再送せず、不足stageだけ進める。
-- `kaigi recover [RUN_ID]` — reconcile→resume→completeならproof packet生成まで行う。
-
-同一runのROUND2/FINALが既に存在する場合は二重送信しない。
-
-## Decision proof
-
-complete Councilは `kaigi packet [RUN_ID]` で `kaigi.decision_packet.v1` にする。safe-auto完走時は自動生成。
-
-packetにはrun/topic/participants/roles/synth、ROUND1/ROUND2/FINALの実message IDs、evidence transcript、final decision、`transcript_sha256`、`packet_sha256`を含める。
-
-検証:
-
-```bash
-kaigi verify [RUN_ID]
-kaigi verify [RUN_ID] --live
-```
-
-local verifyはpacket hash / transcript hash / run ledger pointer / final整合を確認。`--live`は同message IDsをagentchattrから再取得してtranscript hashまで再照合する。
+Job body先頭へrun/packet hashと`execution_authorized=false`を保存する。Job threadへ@mentionを自動送信しない。
 
 ## Authority boundary
 
-会議結果はadvisory。Decision packetやhandoffを実行権限として扱わない。
+会議結果、proof、handoff、TO DO登録をAuthority/Executionへ自動昇格しない。
 
-`kaigi handoff [RUN_ID]` は `kaigi.handoff.v1` を生成し、以下を固定する。
-
-- `authority.classification=advisory`
+- `classification=advisory`
 - `execution_authorized=false`
 - `requires_separate_authority=true`
 
-Evidence/DecisionとAuthority/Executionを混同しない。
+## Launch/API
 
-## CLI launch
+CLIはupstream `wrapper.py AGENT`。skip-permissions/bypass/yolo系を自動利用しない。APIはupstream `wrapper_api.py`。local APIのみ暗黙wake可、cloudは明示時だけ。secret値は保存せず環境変数名だけ保持。
 
-`kaigi launch claude codex` はupstream `wrapper.py AGENT` を使う。skip-permissions / bypass / yolo系launcherを自動選択しない。`--dry-run`ではprocessを開始しない。
-
-## API agent governance
-
-upstream `wrapper_api.py`を使用。local APIのみ暗黙wake可。cloudは明示指定時のみ。secret値は設定fileへ保存せず環境変数名だけ保持する。
-
-`kaigi api add NAME --base-url URL --model MODEL [--api-key-env ENV]` でOpenAI互換endpointを追加可能。
-
-ChatGPT bridgeは`kaigi chatgpt setup/start/status`。Web/App/Plus session流用ではなくOpenAI-compatible API経路。
-
-## Run / audit
-
-- `kaigi result [RUN_ID]`
-- `kaigi history [N]`
-- `kaigi export [RUN_ID] --format md|json`
-- `kaigi audit`
-
-`KAIGI_STATE_DIR`既定は`~/.local/state/kaigi`。
+ChatGPT bridgeはWeb/App/Plus session流用ではなくOpenAI-compatible API経路。
 
 ## 成功判定
 
-server/API応答、online status、agent reply、FINAL reply、hash検証など実観測したものだけ成功とする。未観測・推測をPASSとして報告しない。
+API応答、online status、agent reply、FINAL reply、hash/live/runtime検証など実観測済みのみ成功として扱う。未観測を推測でPASSにしない。
