@@ -1,34 +1,49 @@
 #!/usr/bin/env python3
-"""kaigi executable shim — v6 safe-auto/proof with provider-neutral policy."""
+"""kaigi executable shim — v7 capability-aware, provider-neutral council control plane."""
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import kaigi_core as core
 import kaigi_policy as policy
+import kaigi_capabilities as caps
 
 policy.apply_core(core)
-core.VERSION = "6.0.0"
+caps.apply_core(core)
+core.VERSION = "7.0.0"
 
 V5_OPS = {"launch", "go", "reconcile", "sync", "resume"}
 V6_OPS = {"decide", "auto", "packet", "verify", "handoff", "audit", "recover"}
+CAP_OPS = {"caps", "capabilities", "cast"}
 CORE_COMMANDS = {
     "room", "join", "log", "l", "watch", "w", "say", "s", "status", "st", "who",
     "agents", "a", "convene", "meet", "c", "templates", "tpl", "result", "res",
     "history", "hist", "export", "wake", "api", "chatgpt", "chat", "start", "stop",
-    "restart", "r", "doctor", "d", "open", "help", "policy",
+    "restart", "r", "doctor", "d", "open", "help", "policy", *CAP_OPS,
 }
 
 argv = list(sys.argv[1:])
 
-if argv and argv[0] == "policy":
-    raise SystemExit(policy.policy_cli(argv[1:]))
 
-if argv and argv[0] in V6_OPS:
+def load_v6():
     import kaigi_v6 as v6
     policy.apply_ops(v6.ops)
     policy.apply_v6(v6)
-    raise SystemExit(v6.main(argv))
+    caps.apply_v6(v6)
+    return v6
+
+
+if argv and argv[0] == "policy":
+    raise SystemExit(policy.policy_cli(argv[1:]))
+
+if argv and argv[0] in {"caps", "capabilities"}:
+    raise SystemExit(caps.caps_cli(load_v6(), argv[1:]))
+
+if argv and argv[0] == "cast":
+    raise SystemExit(caps.cast_cli(load_v6(), argv[1:]))
+
+if argv and argv[0] in V6_OPS:
+    raise SystemExit(load_v6().main(argv))
 
 if argv and argv[0] in V5_OPS:
     import kaigi_ops as ops
@@ -43,28 +58,30 @@ if argv and argv[0] == "help":
     print("  kaigi reconcile [RUN_ID]         chat実績からrunを再照合")
     print("  kaigi resume [RUN_ID]            未完了Councilを続きから再開")
     print("\nv6 safe-auto/proof:")
-    print("  kaigi \"議題\"                    safe-auto→Council→proof packet")
+    print("  kaigi \"議題\"                    safe-auto→capability cast→Council→proof")
     print("  kaigi decide \"議題\"             上と同じ。詳細option指定用")
     print("  kaigi recover [RUN_ID]           reconcile→resume→packet")
     print("  kaigi packet [RUN_ID]            hash付きDecision packet生成")
     print("  kaigi verify [RUN_ID] --live     packet/ledger/live transcript検証")
     print("  kaigi handoff [RUN_ID]           advisory handoff packet生成")
     print("  kaigi audit                      保存run/proof整合監査")
-    print("  kaigi policy [--json]            provider-neutral policy表示")
+    print("\nv7 capability cast:")
+    print("  kaigi caps                       agent capability一覧")
+    print("  kaigi caps set NAME coding red-team --cost local --speed fast")
+    print("  kaigi caps infer \"議題\"          議題からsoft capability推定")
+    print("  kaigi cast \"議題\"                副作用なしでcastだけ計算")
+    print("  kaigi decide \"議題\" --need coding,red-team --free-only")
     print("\nprovider policy:")
     print("  required provider: none")
     print("  synth default   : balanced (provider名の優先順位なし)")
-    print("  safe-auto       : online/runtime-type基準")
+    print("  safe-auto       : capability→cost→online→speed→reliability")
     print("  cloud API       : 明示許可時のみ")
     raise SystemExit(code)
 
-# v6 UX: @agent shorthand remains a direct message, any other bare text is a meeting topic.
+# v7 UX: @agent shorthand remains direct message; any other bare text is a meeting topic.
 if argv and not argv[0].startswith("-") and argv[0] not in CORE_COMMANDS:
     if argv[0].startswith("@"):
         raise SystemExit(core.main(argv))
-    import kaigi_v6 as v6
-    policy.apply_ops(v6.ops)
-    policy.apply_v6(v6)
-    raise SystemExit(v6.main(["decide", *argv]))
+    raise SystemExit(load_v6().main(["decide", *argv]))
 
 raise SystemExit(core.main(argv if argv else None))
