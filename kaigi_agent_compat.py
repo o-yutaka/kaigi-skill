@@ -15,7 +15,9 @@ For ClawCodex only, when no explicit ``mcp_inject`` is configured:
 
 For POSIX/tmux CLI wrappers, ``kaigi_delivery`` adds metadata-only delivery
 receipts and a non-authorizing Codex hook-review readiness gate. It never
-persists prompt text and never trusts hooks automatically.
+persists prompt text and never trusts hooks automatically. On WSL,
+``kaigi_launch`` starts wrappers as detached Linux processes and requires
+AgentChattr online presence instead of treating terminal creation as success.
 """
 from __future__ import annotations
 
@@ -30,6 +32,7 @@ from typing import Any
 
 import kaigi_core as core
 import kaigi_delivery as delivery
+import kaigi_launch as launch_compat
 
 COMPAT_POLICY = "clawcodex-local-identity-proxy-v1"
 SERVER_NAME = "agentchattr"
@@ -176,8 +179,9 @@ def compat_shell_line(agent: str) -> str:
 
 
 def apply_ops(ops: Any) -> None:
-    """Route kaigi's CLI-agent launcher through the compatibility shim."""
+    """Route Kaigi launches through compatibility and WSL-safe launch shims."""
     ops.shell_line = compat_shell_line
+    launch_compat.apply_ops(ops)
 
 
 def _load_upstream() -> tuple[Any, Any]:
