@@ -14,6 +14,7 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 from typing import Any
 
@@ -21,16 +22,26 @@ import kaigi_relay as base
 
 REVISION = "8.1-progress-watchdog"
 ACTIVE_FILE = base.core.STATE_DIR / "relay-active.json"
+_ACTIVE_LOCK = threading.Lock()
 
 
 def _write_active(data: dict[str, Any] | None) -> None:
-    if data is None:
-        ACTIVE_FILE.unlink(missing_ok=True)
-        return
-    payload = dict(data)
-    payload["revision"] = REVISION
-    payload["observed_at"] = dt.datetime.now().astimezone().isoformat()
-    base._atomic_json(ACTIVE_FILE, payload, mode=0o600)
+    """Serialize writes from the execution loop and heartbeat thread.
+
+    ``base._atomic_json`` intentionally uses a fixed sibling ``.tmp`` path.
+    That is safe for a single writer, but v8.1 has two in-process writers for
+    relay-active.json. Without this lock they can race: writer A renames the
+    temp file, then writer B attempts to rename the same path and gets ENOENT.
+    Keep the existing atomic-file contract and serialize only this shared file.
+    """
+    with _ACTIVE_LOCK:
+        if data is None:
+            ACTIVE_FILE.unlink(missing_ok=True)
+            return
+        payload = dict(data)
+        payload["revision"] = REVISION
+        payload["observed_at"] = dt.datetime.now().astimezone().isoformat()
+        base._atomic_json(ACTIVE_FILE, payload, mode=0o600)
 
 
 def _progress(req: dict[str, Any], *, pid: int | None = None) -> dict[str, Any]:
