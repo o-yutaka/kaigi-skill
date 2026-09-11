@@ -17,9 +17,11 @@ jobs:
       - run: bash -n install.sh
       - name: Local auth discovery invariants
         run: |
-          grep -q 'local-session-discovery-v1' kaigi_auth.py
+          grep -q 'local-session-discovery-v2-dual-header' kaigi_auth.py
           grep -q 'window\\.__SESSION_TOKEN__' kaigi_auth.py
           grep -q '_is_loopback_url' kaigi_auth.py
+          grep -q 'X-Session-Token' kaigi_auth.py
+          grep -q 'Authorization' kaigi_auth.py
           grep -q 'import kaigi_auth as auth' kaigi
           grep -q 'auth.apply_core(core)' kaigi
           ! grep -q 'write_text.*SESSION_TOKEN\|open.*SESSION_TOKEN' kaigi_auth.py
