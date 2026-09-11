@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""v8.2 relay hardening: same-run recovery + privacy-safe participant liveness diagnostics.
+"""v8.2 relay hardening: recovery, liveness, and delivery proof.
 
 This layer intentionally does not broaden remote authority. It keeps the v8.1
-outbound-only relay contract, but fixes three proof gaps observed in live E2E:
+outbound-only relay contract, while closing proof gaps observed in live E2E:
 
 1. A Council stage timeout leaves a locally persisted ``waiting`` run that is
    recoverable, yet v8.1 immediately terminal-failed the remote request.
    v8.2 gives that same bound run one bounded recovery window before failing.
 2. AgentChattr ``available`` means wrapper/presence heartbeat, not end-to-end
-   ability to consume the trigger and return a chat reply. When a Council still
-   times out, v8.2 reports only privacy-safe delivery/liveness metadata (never
-   queue contents or transcript text) so the broken boundary is observable.
-3. ``relay start`` must spawn this v8.2 module, not fall back to the v8.1 file.
+   ability to consume the trigger and return a chat reply.
+3. Queue emptiness alone is not delivery proof: upstream clears the queue before
+   calling the tmux injector.  Recent Kaigi delivery receipts therefore report
+   whether paste+Enter was accepted, without exposing prompt/transcript text.
+4. ``relay start`` must spawn this v8.2 module, not fall back to the v8.1 file.
 """
 from __future__ import annotations
 
@@ -28,10 +29,11 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 compatibility
     tomllib = None
 
+import kaigi_delivery as delivery
 import kaigi_relay as base
 import kaigi_relay_v81 as v81
 
-REVISION = "8.2-recovery-liveness"
+REVISION = "8.2.1-delivery-proof"
 _V81_EXEC = v81._exec_kaigi
 _V81_PROGRESS = v81._progress
 _RECOVERABLE_STAGES = {"round1_timeout", "round2_timeout", "final_timeout", "follow_timeout"}
@@ -76,11 +78,18 @@ def _tmux_session_alive(agent: str) -> bool | None:
     return result.returncode == 0
 
 
+def _recent_delivery(agent: str) -> dict[str, Any] | None:
+    """Return only a recent metadata receipt so stale prompts are not misattributed."""
+    return delivery.read_receipt(agent, max_age_seconds=300.0)
+
+
 def participant_liveness(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Return metadata-only liveness evidence for Council participants.
+    """Return metadata-only liveness/delivery evidence for Council participants.
 
     Queue *contents* are never read. A zero-byte queue after a trigger means only
-    "consumed-or-empty"; it does not claim that the TUI/MCP/reply path succeeded.
+    "consumed-or-empty" because upstream clears before injection.  If present,
+    ``inject_state`` comes from a Kaigi receipt that stores a prompt hash only.
+    It proves at most tmux paste+Enter acceptance, not MCP use or a model reply.
     """
     participants = [str(x) for x in run.get("participants", []) if str(x)]
     try:
@@ -102,11 +111,21 @@ def participant_liveness(run: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 queue_state = "consumed-or-empty"
         except OSError:
             queue_state = "unreadable"
-        out[name] = {
+        item: dict[str, Any] = {
             "presence_online": online,
             "queue_state": queue_state,
             "tmux_session": _tmux_session_alive(name),
         }
+        receipt = _recent_delivery(name)
+        if receipt:
+            item["inject_state"] = str(receipt.get("state") or "unknown")
+            if receipt.get("ui_state"):
+                item["inject_ui_state"] = str(receipt.get("ui_state"))
+            try:
+                item["inject_age_s"] = round(max(0.0, time.time() - float(receipt["observed_unix"])), 1)
+            except (KeyError, TypeError, ValueError):
+                pass
+        out[name] = item
     return out
 
 
@@ -120,9 +139,12 @@ def _compact_liveness(run: dict[str, Any] | None) -> str:
     for name, info in snapshot.items():
         tmux = info.get("tmux_session")
         tmux_text = "na" if tmux is None else ("up" if tmux else "down")
+        inject = str(info.get("inject_state") or "none")
+        ui = str(info.get("inject_ui_state") or "")
+        inject_text = inject + (f"/{ui}" if ui else "")
         parts.append(
             f"{name}[presence={'up' if info.get('presence_online') else 'down'},"
-            f"queue={info.get('queue_state')},tmux={tmux_text}]"
+            f"queue={info.get('queue_state')},tmux={tmux_text},inject={inject_text}]"
         )
     return "participant-liveness: " + "; ".join(parts)
 
