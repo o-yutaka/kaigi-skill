@@ -54,6 +54,7 @@ class LocalAuthDiscoveryTest(unittest.TestCase):
         core = SimpleNamespace(
             SERVER_URL=self.url,
             resolve_token=lambda: ("legacy", "server-log"),
+            auth_headers=lambda: {"Accept": "application/json"},
         )
         with mock.patch.dict(os.environ, {"KAIGI_BEARER_TOKEN": "explicit-secret"}, clear=False):
             kaigi_auth.apply_core(core)
@@ -63,6 +64,7 @@ class LocalAuthDiscoveryTest(unittest.TestCase):
         core = SimpleNamespace(
             SERVER_URL=self.url,
             resolve_token=lambda: ("stale-token", "server-log"),
+            auth_headers=lambda: {"Accept": "application/json"},
         )
         with mock.patch.dict(
             os.environ,
@@ -71,7 +73,7 @@ class LocalAuthDiscoveryTest(unittest.TestCase):
         ):
             kaigi_auth.apply_core(core)
             self.assertEqual(core.resolve_token(), (TOKEN, "local-index-session"))
-            self.assertEqual(core.LOCAL_AUTH_POLICY, "local-session-discovery-v1")
+            self.assertEqual(core.LOCAL_AUTH_POLICY, "local-session-discovery-v2-dual-header")
 
 
 if __name__ == "__main__":
