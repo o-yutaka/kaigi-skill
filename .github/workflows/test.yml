@@ -12,7 +12,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py kaigi_policy.py kaigi_capabilities.py kaigi_auth.py kaigi_transport.py kaigi_relay.py kaigi_relay_v81.py
+      - run: python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py kaigi_policy.py kaigi_capabilities.py kaigi_auth.py kaigi_transport.py kaigi_relay.py kaigi_relay_v81.py kaigi_relay_v82.py
       - run: python -m unittest discover -v tests -p 'test_*.py'
       - run: bash -n install.sh
       - name: Local auth discovery invariants
@@ -56,8 +56,17 @@ jobs:
           grep -q 'local meeting stage stall' kaigi_relay_v81.py
           grep -q '_process_claimed_with_terminal_fail' kaigi_relay_v81.py
           grep -q 'base.cmd_serve = cmd_serve' kaigi_relay_v81.py
-          grep -q 'kaigi_relay_v81' kaigi
           grep -q 'killpg' kaigi_relay_v81.py
+      - name: Relay recovery and liveness invariants
+        run: |
+          grep -q '8.2-recovery-liveness' kaigi_relay_v82.py
+          grep -q 'same-run recovery attempted' kaigi_relay_v82.py
+          grep -q 'participant-liveness' kaigi_relay_v82.py
+          grep -q 'queue_state' kaigi_relay_v82.py
+          grep -q 'kaigi_relay_v82' kaigi
+          grep -q 'KAIGI_RELAY_V82' install.sh
+          test -f tests/test_relay_v82.py
+          ! grep -q 'read_text.*queue' kaigi_relay_v82.py
       - name: Provider-neutral installer idempotency
         run: |
           HOME="$RUNNER_TEMP/kaigi-neutral" KAIGI_SKILL_TARGETS=none bash install.sh
@@ -68,6 +77,7 @@ jobs:
           test -f ./kaigi_transport.py
           test -x ./kaigi_relay.py
           test -x ./kaigi_relay_v81.py
+          test -x ./kaigi_relay_v82.py
           test ! -e "$RUNNER_TEMP/kaigi-neutral/.claude"
           test ! -e "$RUNNER_TEMP/kaigi-neutral/.hermes"
           test ! -e "$RUNNER_TEMP/kaigi-neutral/.codex"
