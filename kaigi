@@ -9,6 +9,7 @@ import kaigi_policy as policy
 import kaigi_capabilities as caps
 import kaigi_auth as auth
 import kaigi_transport as transport
+import kaigi_agent_compat as agent_compat
 
 policy.apply_core(core)
 caps.apply_core(core)
@@ -32,6 +33,7 @@ argv = list(sys.argv[1:])
 def load_v6():
     import kaigi_v6 as v6
     policy.apply_ops(v6.ops)
+    agent_compat.apply_ops(v6.ops)
     policy.apply_v6(v6)
     caps.apply_v6(v6)
     return v6
@@ -59,6 +61,7 @@ if argv and argv[0] in V6_OPS:
 if argv and argv[0] in V5_OPS:
     import kaigi_ops as ops
     policy.apply_ops(ops)
+    agent_compat.apply_ops(ops)
     raise SystemExit(ops.main(argv))
 
 if argv and argv[0] == "help":
@@ -95,6 +98,7 @@ if argv and argv[0] == "help":
     print("  cloud API       : 明示許可 + local relay policy許可時のみ")
     print("  local auth      : explicit env → live loopback session discovery → legacy log")
     print("  control send    : human/session→WebSocket, registered-agent Bearer→REST")
+    print("  ClawCodex       : Kaigi-owned workspace → local AgentChattr identity proxy (no bearer persistence)")
     raise SystemExit(code)
 
 if argv and not argv[0].startswith("-") and argv[0] not in CORE_COMMANDS:
