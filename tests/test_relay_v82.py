@@ -95,6 +95,7 @@ class RelayV82ContractTest(unittest.TestCase):
                     "gamma": {"available": False},
                 }
                 v82._tmux_session_alive = lambda name: name == "alpha"
+                v82._recent_delivery = lambda _name: None
                 snap = v82.participant_liveness({"participants": ["alpha", "beta", "gamma"]})
                 assert snap["alpha"] == {"presence_online": True, "queue_state": "unconsumed", "tmux_session": True}
                 assert snap["beta"] == {"presence_online": True, "queue_state": "consumed-or-empty", "tmux_session": False}
@@ -102,6 +103,49 @@ class RelayV82ContractTest(unittest.TestCase):
                 rendered = v82._compact_liveness({"participants": ["alpha", "beta", "gamma"]})
                 assert "secret-payload" not in rendered
                 assert "queue=unconsumed" in rendered
+                assert "inject=none" in rendered
+            print("ok")
+            '''
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ok", result.stdout)
+
+    def test_recent_delivery_receipt_is_exposed_without_prompt_text(self):
+        result = self._run(
+            r'''
+            import hashlib
+            import os
+            import pathlib
+            import tempfile
+            import kaigi_delivery as delivery
+            import kaigi_relay as base
+            import kaigi_relay_v82 as v82
+
+            with tempfile.TemporaryDirectory() as tmp:
+                root = pathlib.Path(tmp)
+                os.environ["KAIGI_DELIVERY_DIR"] = str(root / "receipts")
+                (root / "config.toml").write_text('[server]\ndata_dir = "runtime-data"\n', encoding="utf-8")
+                data = root / "runtime-data"
+                data.mkdir()
+                (data / "codex_queue.jsonl").write_text("", encoding="utf-8")
+                secret = "never-print-this-prompt"
+                delivery.write_receipt(
+                    "codex",
+                    "tmux-submit-ok",
+                    session_name="agentchattr-codex",
+                    provider="codex",
+                    prompt_sha256=hashlib.sha256(secret.encode()).hexdigest(),
+                    ui_state="ready",
+                )
+                base.core.HOME = root
+                base.core.fetch_status = lambda: {"codex": {"available": True}}
+                v82._tmux_session_alive = lambda _name: True
+                snap = v82.participant_liveness({"participants": ["codex"]})
+                assert snap["codex"]["inject_state"] == "tmux-submit-ok"
+                assert snap["codex"]["inject_ui_state"] == "ready"
+                rendered = v82._compact_liveness({"participants": ["codex"]})
+                assert "inject=tmux-submit-ok/ready" in rendered
+                assert secret not in rendered
             print("ok")
             '''
         )
@@ -124,6 +168,7 @@ class RelayV82ContractTest(unittest.TestCase):
             assert not v82._is_relay_serve_cmd("python /tmp/kaigi_relay_v82.py status")
             assert base.cmd_start is v82.cmd_start
             assert v81.cmd_start is v82.cmd_start
+            assert v82.REVISION == "8.2.1-delivery-proof"
             print("ok")
             '''
         )
