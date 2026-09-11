@@ -89,10 +89,14 @@ class DeliveryReceiptTest(unittest.TestCase):
             self.assertTrue(inject("deferred prompt"))
             self.assertEqual(seen, [])
             deadline = time.time() + 1.0
-            while not seen and time.time() < deadline:
+            receipt = None
+            while time.time() < deadline:
+                receipt = delivery.read_receipt("codex")
+                if seen and receipt and receipt.get("state") == "tmux-submit-ok":
+                    break
                 time.sleep(0.01)
             self.assertEqual(seen, ["deferred prompt"])
-            receipt = delivery.read_receipt("codex")
+            self.assertIsNotNone(receipt)
             self.assertEqual(receipt["state"], "tmux-submit-ok")
             self.assertEqual(receipt["ui_state"], "ready")
         finally:
