@@ -5,12 +5,14 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import kaigi_core as core
+import kaigi_atomic as atomic
 import kaigi_policy as policy
 import kaigi_capabilities as caps
 import kaigi_auth as auth
 import kaigi_transport as transport
 import kaigi_agent_compat as agent_compat
 
+atomic.apply_core(core)
 policy.apply_core(core)
 caps.apply_core(core)
 auth.apply_core(core)
