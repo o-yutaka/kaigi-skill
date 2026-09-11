@@ -2,7 +2,7 @@
 """v8.2 relay hardening: same-run recovery + privacy-safe participant liveness diagnostics.
 
 This layer intentionally does not broaden remote authority. It keeps the v8.1
-outbound-only relay contract, but fixes two proof gaps observed in live E2E:
+outbound-only relay contract, but fixes three proof gaps observed in live E2E:
 
 1. A Council stage timeout leaves a locally persisted ``waiting`` run that is
    recoverable, yet v8.1 immediately terminal-failed the remote request.
@@ -11,6 +11,7 @@ outbound-only relay contract, but fixes two proof gaps observed in live E2E:
    ability to consume the trigger and return a chat reply. When a Council still
    times out, v8.2 reports only privacy-safe delivery/liveness metadata (never
    queue contents or transcript text) so the broken boundary is observable.
+3. ``relay start`` must spawn this v8.2 module, not fall back to the v8.1 file.
 """
 from __future__ import annotations
 
@@ -18,6 +19,8 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
+import time
 from typing import Any
 
 try:
@@ -160,7 +163,7 @@ def _exec_kaigi(req: dict[str, Any], options: dict[str, Any], max_execution: int
 
 
 def _progress(req: dict[str, Any], *, pid: int | None = None) -> dict[str, Any]:
-    """Extend v8.1 progress with a coarse liveness classification only."""
+    """Extend v8.1 progress with a coarse recovery-ready flag only."""
     out = _V81_PROGRESS(req, pid=pid)
     request_id = str(req.get("id") or "")
     run = base.find_bound_run(request_id) if request_id else None
@@ -169,12 +172,55 @@ def _progress(req: dict[str, Any], *, pid: int | None = None) -> dict[str, Any]:
     return out
 
 
-# Patch v8.1 in place so its existing daemon lifecycle, terminal failure contract,
-# progress heartbeat and parser remain the public implementation.
+def _is_relay_serve_cmd(cmd: str) -> bool:
+    return "serve" in cmd and any(
+        name in cmd for name in ("kaigi_relay.py", "kaigi_relay_v81.py", "kaigi_relay_v82.py")
+    )
+
+
+def _daemon_command(interval: Any) -> list[str]:
+    """Build the detached command and bind it to this v8.2 module."""
+    return [sys.executable, str(pathlib.Path(__file__).resolve()), "serve", "--interval", str(interval)]
+
+
+def cmd_start(args: Any) -> int:
+    """Start a detached v8.2 daemon; never silently downgrade to v8.1."""
+    base.load_config()
+    existing = v81._daemon_pid()
+    if existing:
+        print(f"✓ relay already running pid={existing}")
+        return 0
+    base.core.ensure_state_dirs()
+    base.DAEMON_LOG.parent.mkdir(parents=True, exist_ok=True)
+    command = _daemon_command(args.interval)
+    with base.DAEMON_LOG.open("a", encoding="utf-8") as log:
+        kwargs: dict[str, Any] = {
+            "stdout": log,
+            "stderr": subprocess.STDOUT,
+            "stdin": subprocess.DEVNULL,
+        }
+        if os.name == "nt":
+            kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        else:
+            kwargs["start_new_session"] = True
+        proc = subprocess.Popen(command, **kwargs)
+    base.PID_FILE.write_text(str(proc.pid), encoding="utf-8")
+    time.sleep(0.3)
+    if not v81._daemon_pid():
+        raise base.RelayError(f"relay daemon起動を確認できません。log={base.DAEMON_LOG}")
+    print(f"✓ relay daemon started pid={proc.pid} revision={REVISION} log={base.DAEMON_LOG}")
+    return 0
+
+
+# Patch v8.1 in place so its existing serve loop, terminal failure contract,
+# heartbeat and parser remain public while execution/start use v8.2 semantics.
 v81.REVISION = REVISION
 v81._progress = _progress
+v81._is_relay_serve_cmd = _is_relay_serve_cmd
+v81.cmd_start = cmd_start
 base.REVISION = REVISION
 base._exec_kaigi = _exec_kaigi
+base.cmd_start = cmd_start
 
 
 def main(argv: list[str] | None = None) -> int:
