@@ -41,7 +41,7 @@ if argv and argv[0] == "policy":
     raise SystemExit(policy.policy_cli(argv[1:]))
 
 if argv and argv[0] == "relay":
-    import kaigi_relay_v81 as relay
+    import kaigi_relay_v82 as relay
     code = relay.main(argv[1:])
     if len(argv) > 1 and argv[1] == "status":
         print(auth.auth_status_line(core))
@@ -71,7 +71,7 @@ if argv and argv[0] == "help":
     print("\nmeeting/proof:")
     print("  kaigi \"議題\"                    safe-auto→capability cast→Council→proof")
     print("  kaigi decide \"議題\"             上と同じ。詳細option指定用")
-    print("  kaigi recover [RUN_ID]           reconcile→resume→packet")
+    print("  kaigi recover [RUN_ID]           reconcile→不足stageだけresume→packet")
     print("  kaigi packet [RUN_ID]            hash付きDecision packet生成")
     print("  kaigi verify [RUN_ID] --live     packet/ledger/live transcript検証")
     print("  kaigi handoff [RUN_ID]           advisory handoff packet生成")
