@@ -87,9 +87,18 @@ relay requestはlocal runへ `relay_request_id` / request hashで束縛する。
 
 relayはfull Council transcriptをcloudへ返さない。返すのは最終decision、run ID、`packet_sha256`, `transcript_sha256`。
 
-### Local agentchattr auth
+### Local agentchattr auth / control identity
 
-現行agentchattrはserver起動ごとにrandom session tokenを生成し、localhostのindex pageへ `window.__SESSION_TOKEN__` として注入する。detached relay daemonはinteractive shellの認証envを継承しない場合があるため、kaigiは次の順でlocal authを解決する。
+現行agentchattrはhuman/browser sessionとregistered-agent identityを分離している。browser/controlはsession token付きWebSocket `/ws`、agent側REST `/api/send` は `/api/register` で発行されたper-agent Bearerを使う。
+
+kaigiはagentではなくmeeting control planeなので、通常のCouncil kickoff/ROUND2/FINAL依頼はhuman/control sessionとしてWebSocketから投稿する。kaigi自身を `/api/register` せず、Codex等のagent identityやslotをmint/impersonateしない。明示的なregistered-agent Bearerを渡した時だけREST `/api/send` を使う。
+
+```text
+explicit registered-agent Bearer ──→ REST /api/send
+human/control session token       ──→ WebSocket /ws?token=...
+```
+
+detached relay daemonはinteractive shellのauth envを継承しない場合があるため、kaigiは次の順でlocal authを解決する。
 
 ```text
 explicit KAIGI/AGENTCHATTR auth env
@@ -99,7 +108,9 @@ live loopback index session token
 legacy server-log fallback
 ```
 
-live discoveryは `http://127.0.0.1` / `http://localhost` / `http://[::1]` 相当だけに限定し、非loopback endpointからcredentialを取得しない。tokenはmemory上だけで使い、diskへ保存しない。これによりagentchattr再起動でsession tokenがrotationしても、relay側へtokenを手入力・再保存する必要がない。
+live discoveryとsession WebSocket送信はloopbackに限定し、tokenはmemory上だけで使ってdiskへ保存しない。agentchattr再起動でsession tokenがrotationしても次回requestで現行tokenを再取得する。
+
+旧agentchattrとの互換性のためsession-auth RESTを試せるが、現行serverの明示的なBearer-only `/api/send` エラーを観測した場合だけWebSocketへ切り替える。その他の401/403はfail-closedする。
 
 ### Relay progress hardening
 
