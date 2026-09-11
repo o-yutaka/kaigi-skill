@@ -2,7 +2,7 @@
 """Kaigi-launched AgentChattr wrapper compatibility layer.
 
 The upstream AgentChattr wrapper already owns agent identity, registration,
-queue delivery and a local per-agent MCP identity proxy.  This module keeps
+queue delivery and a local per-agent MCP identity proxy. This module keeps
 that contract intact and adds a narrow adapter for ClawCodex, whose executable
 name is not one of AgentChattr's built-in provider names.
 
@@ -21,6 +21,7 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import sys
 import urllib.parse
 from typing import Any
@@ -102,7 +103,7 @@ def prepare_clawcodex_workspace(
 ) -> tuple[pathlib.Path, pathlib.Path]:
     """Write a token-free, Kaigi-owned ClawCodex MCP workspace.
 
-    The project MCP URL is the short-lived local identity proxy.  AgentChattr's
+    The project MCP URL is the short-lived local identity proxy. AgentChattr's
     bearer token remains inside that proxy process and therefore never lands in
     ``.mcp.json`` or ClawCodex's global config.
     """
@@ -156,6 +157,24 @@ def prepare_clawcodex_workspace(
 
     _atomic_json(settings_path, existing)
     return mcp_path, settings_path
+
+
+def compat_shell_line(agent: str) -> str:
+    """Launch upstream wrapper through this adapter in AgentChattr's venv."""
+    py = core.python_bin()
+    wrapper = core.HOME / "wrapper.py"
+    helper = pathlib.Path(__file__).resolve()
+    if not py or not wrapper.is_file():
+        raise core.KaigiError("agentchattr wrapper.py またはvenvが見つかりません。")
+    return (
+        f"cd {shlex.quote(str(core.HOME))} && "
+        f"{shlex.quote(str(py))} {shlex.quote(str(helper))} {shlex.quote(agent)}"
+    )
+
+
+def apply_ops(ops: Any) -> None:
+    """Route kaigi's CLI-agent launcher through the compatibility shim."""
+    ops.shell_line = compat_shell_line
 
 
 def _load_upstream() -> tuple[Any, Any]:
@@ -222,7 +241,7 @@ def install_runtime_patch(config_loader: Any, wrapper: Any, selected_agent: str)
             proxy_url=str(proxy_url),
             original_cwd=original_cwd,
         )
-        # No bearer token is injected into args/env/files.  The local proxy owns it.
+        # No bearer token is injected into args/env/files. The local proxy owns it.
         launch_env = dict(env)
         return list(extra_args), launch_env, {}, mcp_path
 
