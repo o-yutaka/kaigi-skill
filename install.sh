@@ -12,6 +12,7 @@ KAIGI_CAPS="$SKILL_DIR/kaigi_capabilities.py"
 KAIGI_AUTH="$SKILL_DIR/kaigi_auth.py"
 KAIGI_TRANSPORT="$SKILL_DIR/kaigi_transport.py"
 KAIGI_AGENT_COMPAT="$SKILL_DIR/kaigi_agent_compat.py"
+KAIGI_DELIVERY="$SKILL_DIR/kaigi_delivery.py"
 KAIGI_RELAY="$SKILL_DIR/kaigi_relay.py"
 KAIGI_RELAY_V81="$SKILL_DIR/kaigi_relay_v81.py"
 KAIGI_RELAY_V82="$SKILL_DIR/kaigi_relay_v82.py"
@@ -20,7 +21,7 @@ LOCAL_BIN="$HOME/.local/bin"
 CANONICAL_SKILL="$HOME/.local/share/kaigi/skills/kaigi"
 TARGETS="${KAIGI_SKILL_TARGETS:-auto}"
 
-for file in "$KAIGI_SCRIPT" "$KAIGI_CORE" "$KAIGI_OPS" "$KAIGI_V6" "$KAIGI_POLICY" "$KAIGI_CAPS" "$KAIGI_AUTH" "$KAIGI_TRANSPORT" "$KAIGI_AGENT_COMPAT" "$KAIGI_RELAY" "$KAIGI_RELAY_V81" "$KAIGI_RELAY_V82" "$SKILL_MD"; do
+for file in "$KAIGI_SCRIPT" "$KAIGI_CORE" "$KAIGI_OPS" "$KAIGI_V6" "$KAIGI_POLICY" "$KAIGI_CAPS" "$KAIGI_AUTH" "$KAIGI_TRANSPORT" "$KAIGI_AGENT_COMPAT" "$KAIGI_DELIVERY" "$KAIGI_RELAY" "$KAIGI_RELAY_V81" "$KAIGI_RELAY_V82" "$SKILL_MD"; do
   [[ -f "$file" ]] || { echo "エラー: $file がありません。repository一式を更新してください" >&2; exit 1; }
 done
 
@@ -103,6 +104,8 @@ echo
 echo "Local agentchattr auth: explicit env -> live loopback session discovery -> legacy log"
 echo "Control send: human/session -> WebSocket; registered-agent Bearer -> REST /api/send"
 echo "ClawCodex compat: Kaigi-owned workspace -> local identity proxy; bearer is not persisted"
+echo "CLI delivery proof: prompt text is never persisted; tmux paste+Enter gets a metadata receipt"
+echo "Codex hook review: detected as blocked; Kaigi never trusts hooks automatically"
 echo "Relay timeout: same bound run gets one bounded recover window; no second Council"
 echo "Capability registry: ${KAIGI_CAPABILITY_REGISTRY:-${KAIGI_CONFIG_DIR:-$HOME/.config/kaigi}/capabilities.json}"
 echo "Provider-specific skill adapters are optional:"
