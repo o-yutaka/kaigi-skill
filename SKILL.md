@@ -40,11 +40,15 @@ Cast priority: required coverage → soft coverage → cost → online → speed
 
 `kaigi policy --json` で確認する。
 
-## Local agentchattr auth
+## Local agentchattr auth / identity boundary
 
-現行agentchattrのREST APIはsession tokenまたはregistered-agent Bearerを要求する。detached relay daemonがinteractive shellのauth envを持たない場合でも、kaigiはlocalhost indexへserverが注入した現行session tokenをmemory上だけで自動取得できる。
+現行agentchattrはhuman/browser sessionとregistered-agent identityを分離している。browser/control側はsession tokenでWebSocket `/ws` を使い、agent側REST `/api/send` は `/api/register` で発行されたper-agent Bearerを要求する。
 
-優先順位は `explicit auth env → live loopback session discovery → legacy log`。live discoveryはloopback HTTPだけに限定し、非loopbackからtokenを取得しない。tokenをdiskへ保存しない。agentchattr server再起動でtokenがrotationしても次回requestで現行tokenを再取得する。
+kaigiはmeeting control planeでありagent identityではない。そのため通常のkaigi送信はsession tokenを使うhuman/control WebSocket経路で行い、`/api/register`を呼んでagent slotやagent identityを作らない。明示的なregistered-agent Bearerが与えられた場合だけagent REST経路を使う。
+
+detached relay daemonがinteractive shellのauth envを持たない場合でも、kaigiはlocalhost indexへserverが注入した現行session tokenをmemory上だけで自動取得できる。優先順位は `explicit auth env → live loopback session discovery → legacy log`。live discoveryとsession WebSocket送信はloopbackだけに限定し、tokenをdiskへ保存しない。agentchattr server再起動でtokenがrotationしても次回requestで現行tokenを再取得する。
+
+旧agentchattrとの互換性のためsession-auth REST送信を最初に試せるが、現行のBearer-only `/api/send` エラーを明示観測した場合だけhuman/session WebSocketへ切り替える。その他の401/403は握りつぶさずfail-closedする。
 
 ## Council / proof
 
