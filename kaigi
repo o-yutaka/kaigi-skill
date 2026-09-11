@@ -40,7 +40,10 @@ if argv and argv[0] == "policy":
 
 if argv and argv[0] == "relay":
     import kaigi_relay_v81 as relay
-    raise SystemExit(relay.main(argv[1:]))
+    code = relay.main(argv[1:])
+    if len(argv) > 1 and argv[1] == "status":
+        print(auth.auth_status_line(core))
+    raise SystemExit(code)
 
 if argv and argv[0] in {"caps", "capabilities"}:
     raise SystemExit(caps.caps_cli(load_v6(), argv[1:]))
@@ -80,7 +83,7 @@ if argv and argv[0] == "help":
     print("\nv8 relay:")
     print("  kaigi relay pair --url URL       single-use codeでこのPCをpair")
     print("  kaigi relay start                outbound polling workerをbackground開始")
-    print("  kaigi relay status               daemon + relay + active stage")
+    print("  kaigi relay status               daemon + relay + active stage + local auth source")
     print("  kaigi relay once                 pending requestを1件だけ処理")
     print("  kaigi relay config               remote cloud policy等を確認/変更")
     print("\nprovider policy:")
