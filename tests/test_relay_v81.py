@@ -1,3 +1,9 @@
+from __future__ import annotations
+
+import json
+import pathlib
+import tempfile
+import threading
 import unittest
 
 import kaigi_relay as base
@@ -52,6 +58,44 @@ class RelayV81FailureContractTest(unittest.TestCase):
         self.assertIs(base.cmd_start, v81.cmd_start)
         self.assertIs(base.cmd_stop, v81.cmd_stop)
         self.assertEqual(base.REVISION, "8.1-progress-watchdog")
+
+    def test_concurrent_active_writers_are_serialized(self):
+        """Execution-loop and heartbeat writes must not share the .tmp concurrently."""
+        with tempfile.TemporaryDirectory() as tmp:
+            original_file = v81.ACTIVE_FILE
+            v81.ACTIVE_FILE = pathlib.Path(tmp) / "relay-active.json"
+            errors: list[BaseException] = []
+            start = threading.Barrier(9)
+
+            def writer(index: int) -> None:
+                try:
+                    start.wait(timeout=3)
+                    for seq in range(40):
+                        v81._write_active({
+                            "request_id": f"req-{index}",
+                            "run_id": f"run-{index}",
+                            "stage": "round1",
+                            "round1_replies": seq,
+                        })
+                except BaseException as exc:  # capture thread failures for assertion
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=writer, args=(i,)) for i in range(8)]
+            try:
+                for thread in threads:
+                    thread.start()
+                start.wait(timeout=3)
+                for thread in threads:
+                    thread.join(timeout=5)
+                self.assertFalse(any(thread.is_alive() for thread in threads))
+                self.assertEqual(errors, [])
+                payload = json.loads(v81.ACTIVE_FILE.read_text(encoding="utf-8"))
+                self.assertEqual(payload["stage"], "round1")
+                self.assertEqual(payload["revision"], v81.REVISION)
+                self.assertIn("observed_at", payload)
+                self.assertFalse(v81.ACTIVE_FILE.with_suffix(".json.tmp").exists())
+            finally:
+                v81.ACTIVE_FILE = original_file
 
 
 if __name__ == "__main__":
