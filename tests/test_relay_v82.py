@@ -108,6 +108,28 @@ class RelayV82ContractTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("ok", result.stdout)
 
+    def test_daemon_start_command_is_bound_to_v82(self):
+        result = self._run(
+            r'''
+            import pathlib
+            import kaigi_relay as base
+            import kaigi_relay_v81 as v81
+            import kaigi_relay_v82 as v82
+
+            command = v82._daemon_command(2.5)
+            assert pathlib.Path(command[1]).name == "kaigi_relay_v82.py"
+            assert command[2:] == ["serve", "--interval", "2.5"]
+            assert v82._is_relay_serve_cmd("python /tmp/kaigi_relay_v82.py serve --interval 2")
+            assert v82._is_relay_serve_cmd("python /tmp/kaigi_relay_v81.py serve --interval 2")
+            assert not v82._is_relay_serve_cmd("python /tmp/kaigi_relay_v82.py status")
+            assert base.cmd_start is v82.cmd_start
+            assert v81.cmd_start is v82.cmd_start
+            print("ok")
+            '''
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("ok", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
