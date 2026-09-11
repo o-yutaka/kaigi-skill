@@ -71,7 +71,7 @@ class LocalAuthDiscoveryTest(unittest.TestCase):
         ):
             kaigi_auth.apply_core(core)
             self.assertEqual(core.resolve_token(), (TOKEN, "local-index-session"))
-            self.assertEqual(core.LOCAL_AUTH_POLICY, "local-session-discovery-v1")
+            self.assertEqual(core.LOCAL_AUTH_POLICY, "local-session-discovery-v3-identity-separated")
 
 
 if __name__ == "__main__":
