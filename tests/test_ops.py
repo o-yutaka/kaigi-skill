@@ -200,7 +200,7 @@ class OpsCliTest(unittest.TestCase):
         r = self.run_cli("launch", "dummy", "--here", "--dry-run")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("dry-run:here:", r.stdout)
-        self.assertIn("wrapper.py dummy", r.stdout)
+        self.assertIn("kaigi_agent_compat.py dummy", r.stdout)
 
     def test_public_version_is_v8(self):
         r = self.run_cli("--version")
