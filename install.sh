@@ -13,16 +13,17 @@ KAIGI_AUTH="$SKILL_DIR/kaigi_auth.py"
 KAIGI_TRANSPORT="$SKILL_DIR/kaigi_transport.py"
 KAIGI_RELAY="$SKILL_DIR/kaigi_relay.py"
 KAIGI_RELAY_V81="$SKILL_DIR/kaigi_relay_v81.py"
+KAIGI_RELAY_V82="$SKILL_DIR/kaigi_relay_v82.py"
 SKILL_MD="$SKILL_DIR/SKILL.md"
 LOCAL_BIN="$HOME/.local/bin"
 CANONICAL_SKILL="$HOME/.local/share/kaigi/skills/kaigi"
 TARGETS="${KAIGI_SKILL_TARGETS:-auto}"
 
-for file in "$KAIGI_SCRIPT" "$KAIGI_CORE" "$KAIGI_OPS" "$KAIGI_V6" "$KAIGI_POLICY" "$KAIGI_CAPS" "$KAIGI_AUTH" "$KAIGI_TRANSPORT" "$KAIGI_RELAY" "$KAIGI_RELAY_V81" "$SKILL_MD"; do
+for file in "$KAIGI_SCRIPT" "$KAIGI_CORE" "$KAIGI_OPS" "$KAIGI_V6" "$KAIGI_POLICY" "$KAIGI_CAPS" "$KAIGI_AUTH" "$KAIGI_TRANSPORT" "$KAIGI_RELAY" "$KAIGI_RELAY_V81" "$KAIGI_RELAY_V82" "$SKILL_MD"; do
   [[ -f "$file" ]] || { echo "エラー: $file がありません。repository一式を更新してください" >&2; exit 1; }
 done
 
-chmod +x "$KAIGI_SCRIPT" "$KAIGI_RELAY" "$KAIGI_RELAY_V81"
+chmod +x "$KAIGI_SCRIPT" "$KAIGI_RELAY" "$KAIGI_RELAY_V81" "$KAIGI_RELAY_V82"
 mkdir -p "$LOCAL_BIN"
 LINK_PATH="$LOCAL_BIN/kaigi"
 
@@ -85,7 +86,7 @@ if [[ ":${PATH}:" != *":${LOCAL_BIN}:"* ]]; then
 fi
 
 echo
-echo "kaigi v8 install complete — provider-neutral / capability-aware / relay-progress-ready"
+echo "kaigi v8 install complete — provider-neutral / capability-aware / relay-recovery-ready"
 echo "  kaigi \"議題\"                                      # capability cast→Council→proof"
 echo "  kaigi cast \"議題\"                                 # 副作用なしでcast確認"
 echo "  kaigi caps                                          # capability registry"
@@ -100,6 +101,7 @@ echo "  kaigi verify --live                                 # proof検証"
 echo
 echo "Local agentchattr auth: explicit env -> live loopback session discovery -> legacy log"
 echo "Control send: human/session -> WebSocket; registered-agent Bearer -> REST /api/send"
+echo "Relay timeout: same bound run gets one bounded recover window; no second Council"
 echo "Capability registry: ${KAIGI_CAPABILITY_REGISTRY:-${KAIGI_CONFIG_DIR:-$HOME/.config/kaigi}/capabilities.json}"
 echo "Provider-specific skill adapters are optional:"
 echo "  KAIGI_SKILL_TARGETS=none bash install.sh"
