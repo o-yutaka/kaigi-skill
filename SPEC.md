@@ -15,6 +15,7 @@
 7. terminal stateを未観測のままsuccess扱いしない。
 8. relay `running` はstage telemetryを持ち、同一stageの無期限待機を許可しない。
 9. agentchattr authの自動取得はloopback HTTPだけに限定し、取得tokenをdiskへ永続化しない。
+10. kaigi controlはregistered-agent identityをmint/impersonateしない。human/session transportとagent Bearer transportを分離する。
 
 ## Public UX
 
@@ -39,11 +40,11 @@ Council is ROUND1 independent fan-out → ROUND2 dissent/review → FINAL synthe
 
 Decision packet schema remains `kaigi.decision_packet.v1`; capability plan and evidence transcript are bound by canonical SHA-256. Handoff remains advisory with `execution_authorized=false`.
 
-## Local agentchattr auth
+## Local agentchattr auth and transport identity
 
-Current agentchattr creates a fresh random session token on each server start and injects it into the loopback index page for the browser client. A detached kaigi relay daemon cannot assume that the interactive shell's auth environment is available.
+Current agentchattr creates a fresh random browser session token on each server start and injects it into the loopback index page. Separately, each registered agent receives a per-agent Bearer token from `/api/register`. These credentials represent different identities and are not interchangeable.
 
-kaigi resolves local REST auth in this order:
+A detached kaigi relay daemon cannot assume that the interactive shell's auth environment is available. kaigi resolves local auth in this order:
 
 1. explicit `KAIGI_BEARER_TOKEN` / `AGENTCHATTR_AGENT_TOKEN`;
 2. explicit `KAIGI_TOKEN` / `AGENTCHATTR_TOKEN`;
@@ -51,6 +52,17 @@ kaigi resolves local REST auth in this order:
 4. legacy server-log token fallback.
 
 Live discovery accepts only loopback HTTP hosts (`127.0.0.1`, `localhost`, `::1`) and only the exact upstream `token_hex(32)` shape. It never scrapes a remote/non-loopback endpoint for credentials. The discovered token remains in process memory only and is fetched live, so an agentchattr restart/token rotation does not require persisting a new token into relay config.
+
+Transport contract:
+
+- human/control session token -> AgentChattr WebSocket `/ws?token=...` message path;
+- explicit registered-agent Bearer -> REST `/api/send`;
+- kaigi control never calls `/api/register` and never allocates an agent slot;
+- session WebSocket sending is loopback-only;
+- older AgentChattr session-REST behavior may be attempted for compatibility, but switching to WebSocket occurs only after the explicit current Bearer-only `/api/send` error is observed;
+- unrelated 401/403 errors remain terminal/fail-closed.
+
+This preserves `Control != Agent Identity`: the Council orchestrator can post the same human/control message that the browser would post without impersonating Codex, Claude, a local model, or any other participant.
 
 ## Relay topology
 
@@ -87,7 +99,7 @@ Provisioning uses a high-entropy single-use pairing code. Server stores only `co
 
 Worker stores the token in `~/.config/kaigi/relay.json` (or `KAIGI_RELAY_CONFIG`) mode 0600. Every normal Edge request requires `x-kaigi-worker-token`; server derives worker ID from the matched token and ignores client-supplied worker identity.
 
-The relay worker token and the local agentchattr session token are separate credentials with separate failure domains. The worker token may persist locally; the discovered agentchattr session token must not.
+The relay worker token, local agentchattr browser session token, and any registered-agent Bearer token are separate credentials with separate failure domains. The worker token may persist locally; an auto-discovered browser session token must not.
 
 ## Remote option allowlist
 
@@ -157,7 +169,7 @@ Current relay protocol is `2`, adding stage/progress heartbeat while remaining c
 CI minimum:
 
 ```bash
-python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py kaigi_policy.py kaigi_capabilities.py kaigi_auth.py kaigi_relay.py kaigi_relay_v81.py
+python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py kaigi_policy.py kaigi_capabilities.py kaigi_auth.py kaigi_transport.py kaigi_relay.py kaigi_relay_v81.py
 python -m unittest discover -v tests -p 'test_*.py'
 bash -n install.sh
 ```
@@ -168,6 +180,11 @@ Regression/invariants must prove:
 - non-loopback auth discovery performs no network credential fetch
 - explicit auth environment overrides auto-discovery
 - live index auth outranks stale legacy-log fallback
+- discovered/session credentials are never synthesized into registered-agent Bearer authorization
+- current AgentChattr session-auth `/api/send` rejection falls back to human/control WebSocket and produces a durable message
+- explicit registered-agent Bearer remains on REST `/api/send`
+- invalid explicit session auth does not silently fall back or get replaced
+- control transport never calls `/api/register`
 - pair stores local worker token at mode 0600
 - public `kaigi relay once` performs claim -> real Council -> proof packet -> verified hashes -> complete
 - receipt replay sends completion without a second ROUND1
@@ -181,4 +198,4 @@ Regression/invariants must prove:
 
 ## Deployment source of truth
 
-Repository contains reproducible cloud schema/function/migration source but never active pairing codes, worker tokens, Supabase service-role keys, provider API keys, or agentchattr session tokens.
+Repository contains reproducible cloud schema/function/migration source but never active pairing codes, worker tokens, Supabase service-role keys, provider API keys, agentchattr session tokens, or registered-agent bearer tokens.
