@@ -12,7 +12,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py kaigi_policy.py kaigi_capabilities.py kaigi_auth.py kaigi_transport.py kaigi_agent_compat.py kaigi_relay.py kaigi_relay_v81.py kaigi_relay_v82.py
+      - run: python -m py_compile kaigi kaigi_core.py kaigi_ops.py kaigi_v6.py kaigi_policy.py kaigi_capabilities.py kaigi_auth.py kaigi_transport.py kaigi_agent_compat.py kaigi_delivery.py kaigi_relay.py kaigi_relay_v81.py kaigi_relay_v82.py
       - run: python -m unittest discover -v tests -p 'test_*.py'
       - run: bash -n install.sh
       - name: Local auth discovery invariants
@@ -37,15 +37,22 @@ jobs:
           ! grep -q '/api/register' kaigi_transport.py
           test ! -e tests/test_auth_dual_header.py
           test -f tests/test_auth_header_boundary.py
-      - name: ClawCodex identity-proxy compatibility invariants
+      - name: ClawCodex and delivery compatibility invariants
         run: |
           test -f kaigi_agent_compat.py
+          test -f kaigi_delivery.py
           test -f tests/test_agent_compat.py
+          test -f tests/test_delivery.py
           grep -q 'clawcodex-local-identity-proxy-v1' kaigi_agent_compat.py
           grep -q 'enabledMcpjsonServers' kaigi_agent_compat.py
           grep -q 'additionalWorkingDirectories' kaigi_agent_compat.py
+          grep -q 'delivery.install_wrapper_patch' kaigi_agent_compat.py
+          grep -q 'tmux-submit-receipt-v1' kaigi_delivery.py
+          grep -q 'deferred-hooks-review' kaigi_delivery.py
+          grep -q 'prompt_sha256' kaigi_delivery.py
           grep -q 'agent_compat.apply_ops' kaigi
           grep -q 'KAIGI_AGENT_COMPAT' install.sh
+          grep -q 'KAIGI_DELIVERY' install.sh
           ! grep -q 'enableAllProjectMcpServers.*true' kaigi_agent_compat.py
           ! grep -q 'Authorization.*Bearer' kaigi_agent_compat.py
       - name: Relay cloud source invariants
@@ -72,10 +79,11 @@ jobs:
           grep -q 'killpg' kaigi_relay_v81.py
       - name: Relay recovery and liveness invariants
         run: |
-          grep -q '8.2-recovery-liveness' kaigi_relay_v82.py
+          grep -q '8.2.1-delivery-proof' kaigi_relay_v82.py
           grep -q 'same-run recovery attempted' kaigi_relay_v82.py
           grep -q 'participant-liveness' kaigi_relay_v82.py
           grep -q 'queue_state' kaigi_relay_v82.py
+          grep -q 'inject_state' kaigi_relay_v82.py
           grep -q 'kaigi_relay_v82' kaigi
           grep -q 'KAIGI_RELAY_V82' install.sh
           test -f tests/test_relay_v82.py
@@ -89,6 +97,7 @@ jobs:
           test -f ./kaigi_auth.py
           test -f ./kaigi_transport.py
           test -x ./kaigi_agent_compat.py
+          test -f ./kaigi_delivery.py
           test -x ./kaigi_relay.py
           test -x ./kaigi_relay_v81.py
           test -x ./kaigi_relay_v82.py
