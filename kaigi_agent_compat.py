@@ -3,8 +3,8 @@
 
 The upstream AgentChattr wrapper already owns agent identity, registration,
 queue delivery and a local per-agent MCP identity proxy. This module keeps
-that contract intact and adds a narrow adapter for ClawCodex, whose executable
-name is not one of AgentChattr's built-in provider names.
+that contract intact and adds narrow Kaigi runtime adapters without modifying
+AgentChattr on disk.
 
 For ClawCodex only, when no explicit ``mcp_inject`` is configured:
 - keep AgentChattr's generated per-agent bearer token inside its local proxy;
@@ -13,7 +13,9 @@ For ClawCodex only, when no explicit ``mcp_inject`` is configured:
 - never write the AgentChattr bearer token to ClawCodex config;
 - never modify the user's project repository or global ClawCodex config.
 
-All other agents pass through to upstream wrapper.py unchanged.
+For POSIX/tmux CLI wrappers, ``kaigi_delivery`` adds metadata-only delivery
+receipts and a non-authorizing Codex hook-review readiness gate. It never
+persists prompt text and never trusts hooks automatically.
 """
 from __future__ import annotations
 
@@ -27,6 +29,7 @@ import urllib.parse
 from typing import Any
 
 import kaigi_core as core
+import kaigi_delivery as delivery
 
 COMPAT_POLICY = "clawcodex-local-identity-proxy-v1"
 SERVER_NAME = "agentchattr"
@@ -257,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
     selected_agent = args[0]
     config_loader, wrapper = _load_upstream()
     install_runtime_patch(config_loader, wrapper, selected_agent)
+    delivery.install_wrapper_patch(selected_agent)
     old_argv = sys.argv
     try:
         sys.argv = [str(core.HOME / "wrapper.py"), *args]
