@@ -18,7 +18,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-AUTH_POLICY = "local-session-discovery-v1"
+AUTH_POLICY = "local-session-discovery-v2-dual-header"
 _TOKEN_RE = re.compile(r"window\.__SESSION_TOKEN__\s*=\s*(\"[0-9a-fA-F]{64}\")\s*;")
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
@@ -75,7 +75,7 @@ def auth_status_line(core: Any) -> str:
 def apply_core(core: Any) -> None:
     if getattr(core, "_kaigi_local_auth_applied", False):
         return
-    original = core.resolve_token
+    original_resolve = core.resolve_token
 
     def resolve_token() -> tuple[str | None, str]:
         token, source = _explicit_env()
@@ -86,8 +86,32 @@ def apply_core(core: Any) -> None:
         if discovered:
             return discovered, "local-index-session"
 
-        return original()
+        return original_resolve()
+
+    def auth_headers() -> dict[str, str]:
+        """Build auth headers without weakening remote credential boundaries.
+
+        Current upstream agentchattr accepts browser session auth as X-Session-Token,
+        while some deployed/local-compatible builds require Authorization: Bearer.
+        For a token that kaigi itself discovered from a loopback index only, send both
+        representations. This dual form is never synthesized for a non-loopback
+        discovered token because discovery is loopback-only. Explicit credentials keep
+        their original semantics.
+        """
+        token, source = resolve_token()
+        headers: dict[str, str] = {"Accept": "application/json"}
+        if not token:
+            return headers
+        if source == "bearer-env":
+            headers["Authorization"] = f"Bearer {token}"
+        elif source == "local-index-session":
+            headers["X-Session-Token"] = token
+            headers["Authorization"] = f"Bearer {token}"
+        else:
+            headers["X-Session-Token"] = token
+        return headers
 
     core.resolve_token = resolve_token
+    core.auth_headers = auth_headers
     core.LOCAL_AUTH_POLICY = AUTH_POLICY
     core._kaigi_local_auth_applied = True
