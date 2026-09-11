@@ -7,7 +7,8 @@ that does not inherit the interactive shell's auth environment, so it discovers 
 session token only from a loopback agentchattr endpoint and keeps it in memory.
 
 Explicit auth environment variables still win. No token is written to disk and no
-non-loopback server is scraped for credentials.
+non-loopback server is scraped for credentials. Browser/session credentials are never
+synthesized into registered-agent Bearer credentials.
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-AUTH_POLICY = "local-session-discovery-v2-dual-header"
+AUTH_POLICY = "local-session-discovery-v3-identity-separated"
 _TOKEN_RE = re.compile(r"window\.__SESSION_TOKEN__\s*=\s*(\"[0-9a-fA-F]{64}\")\s*;")
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
@@ -88,30 +89,9 @@ def apply_core(core: Any) -> None:
 
         return original_resolve()
 
-    def auth_headers() -> dict[str, str]:
-        """Build auth headers without weakening remote credential boundaries.
-
-        Current upstream agentchattr accepts browser session auth as X-Session-Token,
-        while some deployed/local-compatible builds require Authorization: Bearer.
-        For a token that kaigi itself discovered from a loopback index only, send both
-        representations. This dual form is never synthesized for a non-loopback
-        discovered token because discovery is loopback-only. Explicit credentials keep
-        their original semantics.
-        """
-        token, source = resolve_token()
-        headers: dict[str, str] = {"Accept": "application/json"}
-        if not token:
-            return headers
-        if source == "bearer-env":
-            headers["Authorization"] = f"Bearer {token}"
-        elif source == "local-index-session":
-            headers["X-Session-Token"] = token
-            headers["Authorization"] = f"Bearer {token}"
-        else:
-            headers["X-Session-Token"] = token
-        return headers
-
+    # Keep the core header contract intact: registered-agent Bearer stays
+    # Authorization; session credentials stay X-Session-Token. Transport routing
+    # is handled separately by kaigi_transport and must not collapse identities.
     core.resolve_token = resolve_token
-    core.auth_headers = auth_headers
     core.LOCAL_AUTH_POLICY = AUTH_POLICY
     core._kaigi_local_auth_applied = True
